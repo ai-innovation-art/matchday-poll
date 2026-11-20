@@ -41,6 +41,15 @@
 <header><span class="num">2.1</span><h3>Open the front door</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
 <p class="goal">Create an Ingress that sends all traffic for <code>/</code> to the <code>frontend</code> Service, using the <code>nginx</code> ingress class.</p>
 <p class="writes"><b>You write:</b> <code>k8s/60-ingress.yaml</code></p>
+<h4>Values to use</h4>
+<div class="table-wrap"><table>
+<thead><tr><th>Setting</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td>Ingress class</td><td><code>ingressClassName: nginx</code></td></tr>
+<tr><td>Rule</td><td>no host, path <code>/</code>, type <code>Prefix</code></td></tr>
+<tr><td>Backend</td><td>Service <code>frontend</code>, port <code>80</code></td></tr>
+</tbody>
+</table></div>
 <h4>Check</h4>
 <pre><code>kubectl apply -f k8s/60-ingress.yaml
 kubectl get ingress
@@ -72,6 +81,17 @@ spec:
 <header><span class="num">2.2</span><h3>Teach Kubernetes what healthy means</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
 <p class="goal">Add readiness and liveness probes. Readiness controls whether a pod receives traffic. Liveness controls whether it is restarted. The backend's <code>/ready</code> already checks the database, and <code>/health</code> deliberately checks nothing.</p>
 <p class="writes"><b>You write:</b> <code>k8s/30-backend.yaml</code>, <code>k8s/50-frontend.yaml</code>, <code>k8s/10-postgres.yaml</code>, <code>k8s/20-redis.yaml</code></p>
+<h4>Values to use</h4>
+<div class="table-wrap"><table>
+<thead><tr><th>Container</th><th>Probe</th><th>What to check</th></tr></thead>
+<tbody>
+<tr><td>backend</td><td>readiness</td><td>HTTP GET <code>/ready</code> on port <code>http</code> (8000), every 5 s, <code>failureThreshold</code> 2</td></tr>
+<tr><td>backend</td><td>liveness</td><td>HTTP GET <code>/health</code> on port <code>http</code>, <code>initialDelaySeconds</code> 5, every 10 s</td></tr>
+<tr><td>frontend</td><td>readiness and liveness</td><td>HTTP GET <code>/healthz</code> on port 8080</td></tr>
+<tr><td>redis</td><td>readiness</td><td>exec <code>redis-cli ping</code></td></tr>
+<tr><td>postgres</td><td>readiness</td><td>exec <code>pg_isready -U $POSTGRES_USER -d $POSTGRES_DB</code></td></tr>
+</tbody>
+</table></div>
 <h4>Check</h4>
 <pre><code>kubectl apply -f k8s/
 kubectl get pods
@@ -112,6 +132,16 @@ kubectl scale statefulset postgres --replicas=1</code></pre>
 <header><span class="num">2.3</span><h3>Requests and limits</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
 <p class="goal">Give every container resource requests, and a memory limit. Do <b>not</b> set CPU limits on the backend: you will autoscale on CPU use relative to the request, and a CPU limit would throttle it first.</p>
 <p class="writes"><b>You write:</b> <code>k8s/10-postgres.yaml</code>, <code>k8s/20-redis.yaml</code>, <code>k8s/30-backend.yaml</code>, <code>k8s/50-frontend.yaml</code></p>
+<h4>Values to use</h4>
+<div class="table-wrap"><table>
+<thead><tr><th>Container</th><th>CPU request</th><th>Memory request</th><th>Memory limit</th></tr></thead>
+<tbody>
+<tr><td>backend</td><td><code>100m</code></td><td><code>128Mi</code></td><td><code>256Mi</code></td></tr>
+<tr><td>frontend</td><td><code>20m</code></td><td><code>32Mi</code></td><td><code>64Mi</code></td></tr>
+<tr><td>redis</td><td><code>50m</code></td><td><code>32Mi</code></td><td><code>128Mi</code></td></tr>
+<tr><td>postgres</td><td><code>100m</code></td><td><code>256Mi</code></td><td><code>512Mi</code></td></tr>
+</tbody>
+</table></div>
 <h4>Check</h4>
 <pre><code>kubectl apply -f k8s/
 kubectl get pods -o custom-columns=NAME:.metadata.name,QOS:.status.qosClass

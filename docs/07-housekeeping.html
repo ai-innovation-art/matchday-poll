@@ -41,6 +41,16 @@
 <header><span class="num">7.1</span><h3>Reset the poll with a Job</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
 <p class="goal">Write a Job that runs <code>python tools.py reset</code> in the backend image. It deletes all votes and clears the Redis cache. Its pod label must be <code>app: backend-job</code> so your network policies allow it to reach the database and Redis.</p>
 <p class="writes"><b>You write:</b> <code>k8s/95-reset-job.yaml</code></p>
+<h4>Values to use</h4>
+<div class="table-wrap"><table>
+<thead><tr><th>Setting</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td>Image</td><td><code>poll-backend:1.1</code> (or the tag you run)</td></tr>
+<tr><td>Command</td><td><code>["python", "tools.py", "reset"]</code></td></tr>
+<tr><td>Env</td><td><code>DB_HOST</code>, <code>DB_PORT</code>, <code>DB_NAME</code>, <code>REDIS_HOST</code> from the ConfigMap; <code>DB_USER</code>, <code>DB_PASSWORD</code> from the Secret</td></tr>
+<tr><td>Pod label</td><td><code>app: backend-job</code></td></tr>
+</tbody>
+</table></div>
 <h4>Check</h4>
 <pre><code>curl -s localhost:8080/api/results
 kubectl apply -f k8s/95-reset-job.yaml
@@ -77,6 +87,17 @@ spec:
 <header><span class="num">7.2</span><h3>A nightly snapshot with a CronJob</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
 <p class="goal">Write a CronJob that runs <code>python tools.py snapshot</code> on a schedule. For this exercise run it every 2 minutes. Never allow two runs at once, and keep only the last two successful and the last failed Job.</p>
 <p class="writes"><b>You write:</b> <code>k8s/96-cronjob.yaml</code></p>
+<h4>Values to use</h4>
+<div class="table-wrap"><table>
+<thead><tr><th>Setting</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td>Name</td><td><code>snapshot</code></td></tr>
+<tr><td>Schedule</td><td><code>*/2 * * * *</code> (every 2 minutes, for this exercise)</td></tr>
+<tr><td>Policies</td><td><code>concurrencyPolicy: Forbid</code>, keep 2 successful and 1 failed Job</td></tr>
+<tr><td>Command</td><td><code>["python", "tools.py", "snapshot"]</code>, image <code>poll-backend:1.1</code></td></tr>
+<tr><td>Env and label</td><td>same as the reset Job; pod label <code>app: backend-job</code> inside the <code>jobTemplate</code></td></tr>
+</tbody>
+</table></div>
 <h4>Check</h4>
 <pre><code>kubectl apply -f k8s/96-cronjob.yaml
 # vote a few times, then wait about 4 minutes
