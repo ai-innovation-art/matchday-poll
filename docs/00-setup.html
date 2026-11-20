@@ -37,9 +37,54 @@
 <h1>Act 0 · Setup</h1>
 <p class="lede">Images built, a three-node cluster running, and the add-ons installed. Nothing of the poll exists yet.</p>
 <div class="callout">Run all commands from the repository root unless a mission says otherwise.</div>
+<section class="mission" id="m0">
+<header><span class="num">0.1</span><h3>Install the tools</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">You need <b>Docker</b> (runs the cluster), <b>kind</b> (creates the cluster) and <b>kubectl</b> (talks to it). If <code>kind</code> says <i>command not found</i>, it is not installed or not on your <b>PATH</b>. This mission fixes both. Skip any tool you already have.</p>
+<div class="callout"><b>PATH in one sentence:</b> when you type <code>kind</code>, your shell looks for a file called <code>kind</code> in each folder listed in the <code>PATH</code> variable. Installing a tool means putting its file in one of those folders, or adding its folder to the list.</div>
+<details open><summary>Windows</summary><div class="body"><p><b>Docker:</b> install <a href="https://www.docker.com/products/docker-desktop/">Docker Desktop</a>, start it, and wait until it says it is running. It needs WSL 2, which the installer offers to set up.</p><h4>kind and kubectl, option A: winget (one command each)</h4><pre data-title="PowerShell"><code>winget install -e --id Kubernetes.kind
+winget install -e --id Kubernetes.kubectl</code></pre>
+<p>If winget cannot find a package, use option B.</p><h4>Option B: download and set the PATH yourself</h4><pre data-title="PowerShell"><code># 1. a folder for the tools, and add it to your user PATH (run this once)
+New-Item -ItemType Directory -Force C:\Tools | Out-Null
+[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path","User") + ";C:\Tools", "User")
+
+# 2. download kind (pinned version; the kind Quick Start page lists newer ones)
+curl.exe -Lo C:\Tools\kind.exe https://kind.sigs.k8s.io/dl/v0.33.0/kind-windows-amd64
+
+# 3. download kubectl (the current stable release)
+$v = (curl.exe -Ls https://dl.k8s.io/release/stable.txt)
+curl.exe -Lo C:\Tools\kubectl.exe "https://dl.k8s.io/release/$v/bin/windows/amd64/kubectl.exe"</code></pre>
+<h4>Then: open a new terminal</h4><p>A changed PATH is only seen by terminals opened <b>afterwards</b>. Close every PowerShell and Git Bash window and open a new one.</p><pre data-title="Git Bash"><code># Git Bash reads the Windows PATH when it starts, so open a NEW Git Bash window.
+# If a tool is still not found, add its folder for Git Bash only:
+echo 'export PATH="$PATH:/c/Tools"' &gt;&gt; ~/.bashrc
+source ~/.bashrc</code></pre>
+</div></details>
+<details><summary>macOS</summary><div class="body"><p><b>Docker:</b> install Docker Desktop and start it.</p><pre data-title="macOS (Homebrew)"><code>brew install kind kubectl</code></pre>
+</div></details>
+<details><summary>Linux</summary><div class="body"><pre data-title="Linux"><code># kind (use kind-linux-arm64 on an ARM machine)
+curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.33.0/kind-linux-amd64
+chmod +x ./kind
+sudo mv ./kind /usr/local/bin/kind
+
+# kubectl
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+
+# Docker Engine: follow docs.docker.com for your distribution, then
+sudo usermod -aG docker $USER      # log out and in again afterwards</code></pre>
+</div></details>
+<h4>Check that your shell can find them</h4>
+<pre><code>docker version --format '{{.Server.Version}}'
+kind version
+kubectl version --client
+which kind kubectl      # Git Bash, macOS, Linux   (PowerShell: Get-Command kind, kubectl)</code></pre>
+<p class="expect"><b>Expect:</b> a Docker server version, a kind version (for example <code>kind v0.33.0 go1.x ...</code>), a kubectl client version, and a file path for each tool from <code>which</code>.</p>
+<details class="hint"><summary>Hint 1: <code>kind: command not found</code></summary><div class="body">The folder holding <code>kind</code> is not on your PATH, or the terminal was opened before you changed it. Open a new terminal. If it still fails, run <code>which kind</code> (Git Bash) or <code>Get-Command kind</code> (PowerShell): no output means the file is not on the PATH.</div></details>
+<details class="hint"><summary>Hint 2: an older <code>kubectl</code> is found first</summary><div class="body">Docker Desktop installs its own <code>kubectl</code>. If <code>kubectl version --client</code> shows an old version, put your tools folder before Docker's in the PATH, or remove Docker's copy. A kubectl more than one minor version away from the cluster can behave oddly.</div></details>
+<details class="hint"><summary>Hint 3: Docker errors</summary><div class="body"><code>Cannot connect to the Docker daemon</code> (or a pipe error on Windows) means Docker Desktop is not running yet. Start it and wait for the whale icon to settle.</div></details>
+</section>
 <section class="mission" id="m1">
-<header><span class="num">0.1</span><h3>Check your tools</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
-<p class="goal">Make sure Docker, kind and kubectl work.</p>
+<header><span class="num">0.2</span><h3>Check your tools</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Run one last check that all three tools answer in the shell you will work in.</p>
 <h4>Check</h4>
 <pre><code>docker version --format '{{.Server.Version}}'
 kind version
@@ -47,7 +92,7 @@ kubectl version --client</code></pre>
 <p class="expect"><b>Expect:</b> Three version outputs, no errors. If Docker fails, start Docker Desktop (or the Docker service).</p>
 </section>
 <section class="mission" id="m2">
-<header><span class="num">0.2</span><h3>Build the images</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<header><span class="num">0.3</span><h3>Build the images</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
 <p class="goal">Build the backend and frontend images from the Dockerfiles in <code>app/</code>.</p>
 <h4>Check</h4>
 <pre><code>docker build -t poll-backend:1.0 app/backend
@@ -59,7 +104,7 @@ docker run --rm poll-backend:1.0 python -c "import main; print(main.VERSION)"</c
 <details class="hint"><summary>Hint 2</summary><div class="body">The backend image starts even without a database. It connects only when a request needs it.</div></details>
 </section>
 <section class="mission" id="m3">
-<header><span class="num">0.3</span><h3>Create the cluster</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<header><span class="num">0.4</span><h3>Create the cluster</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
 <p class="goal">Write a kind config for a cluster named <code>poll</code> with one control-plane and two workers. Publish the ingress controller's port 80 on your machine's port <b>8080</b>.</p>
 <p class="writes"><b>You write:</b> <code>cluster/kind-cluster.yaml</code></p>
 <h4>Check</h4>
@@ -90,7 +135,7 @@ nodes:
 </div></details>
 </section>
 <section class="mission" id="m4">
-<header><span class="num">0.4</span><h3>Load the images into the cluster</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<header><span class="num">0.5</span><h3>Load the images into the cluster</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
 <p class="goal">The cluster cannot see images in your local Docker. Copy them into every node. There is no registry.</p>
 <h4>Check</h4>
 <pre><code>kind load docker-image poll-backend:1.0 poll-frontend:1.0 --name poll
@@ -99,7 +144,7 @@ docker exec poll-worker crictl images | grep poll</code></pre>
 <details class="hint"><summary>Hint 1</summary><div class="body">Whenever you build a new tag, load it again. A pod with <code>ImagePullBackOff</code> on a local image almost always means this step was skipped.</div></details>
 </section>
 <section class="mission" id="m5">
-<header><span class="num">0.5</span><h3>Add the ingress controller and metrics</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<header><span class="num">0.6</span><h3>Add the ingress controller and metrics</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
 <p class="goal">Install two cluster add-ons: the NGINX ingress controller (for the 8080 URL) and metrics-server (needed for autoscaling and <code>kubectl top</code>). These are commands, not files you write.</p>
 <h4>Check</h4>
 <pre><code>kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.2/deploy/static/provider/kind/deploy.yaml

@@ -39,7 +39,7 @@ scripts/        empty: your scripts go here
 
 ## You need
 
-Docker, [kind](https://kind.sigs.k8s.io/), `kubectl`, `bash` and `curl`. About 6 GB of free memory.
+Docker, [kind](https://kind.sigs.k8s.io/), `kubectl`, `bash` and `curl`. About 6 GB of free memory. Not installed yet? Act 0 of the guide has install and PATH steps for Windows, macOS and Linux.
 
 ## Start
 
