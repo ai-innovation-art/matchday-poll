@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Act 3 · Match starts · Match Day Poll</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="topbar"><button id="nav-open" type="button" aria-label="Open navigation">Menu</button><strong>Match Day Poll</strong></div>
+<div class="shell">
+<aside class="side">
+<a class="brand" href="index.html"><span class="dot"></span>Match Day Poll</a>
+<nav class="nav" aria-label="Guide">
+<div class="group">Guide</div>
+<a href="index.html">Start here</a>
+<div class="group">Missions</div>
+<a href="00-setup.html">0 · Setup</a>
+<a href="01-launch.html">1 · Launch</a>
+<a href="02-go-live.html">2 · Go live</a>
+<a href="03-match-starts.html" aria-current="page">3 · Match starts</a>
+<a href="04-bad-release.html">4 · Bad release</a>
+<a href="05-things-break.html">5 · Things break</a>
+<a href="06-security-review.html">6 · Security review</a>
+<a href="07-housekeeping.html">7 · Housekeeping</a>
+<div class="group">Reference</div>
+<a href="troubleshooting.html">Troubleshooting</a>
+</nav>
+<button class="theme" id="theme" type="button">Toggle light / dark</button>
+</aside>
+<main>
+<div class="content">
+<div class="eyebrow">The first ball</div>
+<h1>Act 3 · Match starts</h1>
+<p class="lede">Generate load, let the HPA add replicas, and learn why changing a ConfigMap alone does nothing.</p>
+<div class="callout"><b>Story:</b> the first ball is bowled. Votes arrive faster than three backend pods can handle. You need a way to generate that traffic, and a way for the cluster to answer it.</div>
+<section class="mission" id="m1">
+<header><span class="num">3.1</span><h3>A fake crowd</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Write a script that simulates voters: several parallel workers, each voting for a random team and then reading the results, for a number of seconds. Arguments: URL, duration, workers.</p>
+<p class="writes"><b>You write:</b> <code>scripts/load.sh</code></p>
+<h4>Check</h4>
+<pre><code>chmod +x scripts/load.sh
+scripts/load.sh http://localhost:8080 30 5
+# watch the page at http://localhost:8080 while it runs</code></pre>
+<p class="expect"><b>Expect:</b> The totals on the page climb while the script runs, and the footer pod name keeps changing.</p>
+<details class="hint"><summary>Hint 1</summary><div class="body">Each worker is a shell function run in the background (<code>worker &amp;</code>) inside a loop; finish with <code>wait</code>. Bash has a built-in <code>SECONDS</code> counter you can compare with an end time.</div></details>
+<details class="hint"><summary>Hint 2</summary><div class="body">A vote is <code>curl -s -X POST -H 'Content-Type: application/json' -d '{"team":"India"}' URL/api/vote</code>. <code>$((RANDOM % 2))</code> gives 0 or 1.</div></details>
+<details class="solution"><summary>Full solution</summary><div class="body"><pre data-title="scripts/load.sh"><code>#!/usr/bin/env bash
+# usage: scripts/load.sh [url] [seconds] [workers]
+URL="${1:-http://localhost:8080}"
+DURATION="${2:-60}"
+WORKERS="${3:-10}"
+end=$((SECONDS + DURATION))
+
+worker() {
+  while [ "$SECONDS" -lt "$end" ]; do
+    if [ $((RANDOM % 2)) -eq 0 ]; then team="India"; else team="Australia"; fi
+    curl -s -o /dev/null -X POST -H 'Content-Type: application/json' \
+         -d "{\"team\":\"$team\"}" "$URL/api/vote"
+    curl -s -o /dev/null "$URL/api/results"
+  done
+}
+
+echo "load: $WORKERS workers for ${DURATION}s against $URL"
+for _ in $(seq "$WORKERS"); do worker &amp; done
+wait
+echo "load: done"</code></pre>
+</div></details>
+</section>
+<section class="mission" id="m2">
+<header><span class="num">3.2</span><h3>Let the cluster scale the backend</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Create a HorizontalPodAutoscaler for the backend: between 3 and 8 replicas, aiming for 50% average CPU use relative to the request. Make it scale down after 60 seconds of calm instead of the default five minutes.</p>
+<p class="writes"><b>You write:</b> <code>k8s/70-hpa.yaml</code></p>
+<h4>Check</h4>
+<pre><code>kubectl apply -f k8s/70-hpa.yaml
+kubectl get hpa
+# terminal 2: scripts/load.sh http://localhost:8080 150 30
+kubectl get hpa -w
+kubectl get pods -l app=backend</code></pre>
+<p class="expect"><b>Expect:</b> TARGETS rises above <code>50%</code>, and REPLICAS grows from 3 towards 8 within a minute or two. When the load stops, REPLICAS falls back to 3 after about a minute.</p>
+<details class="predict"><summary>Predict first: with 3 pods at 150% of their CPU request and a 50% target, how many replicas does the autoscaler want?</summary><div class="body">ceil(3 × 150 ÷ 50) = 9, capped at the maximum of 8.</div></details>
+<details class="hint"><summary>Hint 1</summary><div class="body">The API is <code>autoscaling/v2</code>. The metric is <code>type: Resource</code>, <code>name: cpu</code>, target type <code>Utilization</code>.</div></details>
+<details class="hint"><summary>Hint 2</summary><div class="body">Faster scale-down goes under <code>behavior.scaleDown.stabilizationWindowSeconds</code>. If TARGETS shows <code>&lt;unknown&gt;</code>, metrics-server is not working yet, or the pods have no CPU request.</div></details>
+<details class="solution"><summary>Full solution</summary><div class="body"><pre data-title="k8s/70-hpa.yaml"><code>apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend
+  namespace: poll
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: backend
+  minReplicas: 3
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 50
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 60</code></pre>
+</div></details>
+</section>
+<section class="mission" id="m3">
+<header><span class="num">3.3</span><h3>Changing config does not restart pods</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">If the load does not trigger scaling on your machine, make each vote cost more CPU by raising <code>CPU_COST_MS</code>. Notice when the new value actually takes effect.</p>
+<h4>Check</h4>
+<pre><code>kubectl patch configmap poll-config --type merge -p '{"data":{"CPU_COST_MS":"20"}}'
+kubectl exec deploy/backend -- printenv CPU_COST_MS
+kubectl rollout restart deploy/backend
+kubectl rollout status deploy/backend
+kubectl exec deploy/backend -- printenv CPU_COST_MS</code></pre>
+<p class="expect"><b>Expect:</b> The first <code>printenv</code> still prints <code>5</code>. After the restart it prints <code>20</code>. Update <code>k8s/01-config.yaml</code> too, or the next <code>kubectl apply</code> puts 5 back.</p>
+<details class="predict"><summary>Predict first: why is the value still 5 after you changed the ConfigMap?</summary><div class="body">Environment variables are copied into the container when it starts. A running pod never re-reads them. Only mounted ConfigMap files update, and only the app can notice that.</div></details>
+<details class="hint"><summary>Hint 1</summary><div class="body">Change the file as well as the live object. A patch edits only the cluster, so the file and the cluster now disagree.</div></details>
+</section>
+<section class="mission" id="m4">
+<header><span class="num">3.4</span><h3>See who does the work</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">While the load runs, look at CPU per pod and at where pods landed. This is how you confirm the replicas share the load and the autoscaler's new pods are placed sensibly.</p>
+<h4>Check</h4>
+<pre><code>kubectl top pods -l app=backend
+kubectl top nodes
+kubectl get pods -l app=backend -o wide</code></pre>
+<p class="expect"><b>Expect:</b> CPU use is similar across the backend pods (the Service chooses pods roughly at random). New pods from the autoscaler are spread over the worker nodes.</p>
+<details class="hint"><summary>Hint 1</summary><div class="body"><code>kubectl top</code> needs about a minute of data. Run it repeatedly with <code>watch -n 2</code> if you have it.</div></details>
+</section>
+
+<div class="pager"><a href="02-go-live.html">← 2 · Go live</a><a href="04-bad-release.html">4 · Bad release →</a></div>
+</div>
+</main>
+</div>
+<script src="assets/app.js"></script>
+</body>
+</html>

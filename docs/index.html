@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Match Day Poll · Match Day Poll</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="topbar"><button id="nav-open" type="button" aria-label="Open navigation">Menu</button><strong>Match Day Poll</strong></div>
+<div class="shell">
+<aside class="side">
+<a class="brand" href="index.html"><span class="dot"></span>Match Day Poll</a>
+<nav class="nav" aria-label="Guide">
+<div class="group">Guide</div>
+<a href="index.html" aria-current="page">Start here</a>
+<div class="group">Missions</div>
+<a href="00-setup.html">0 · Setup</a>
+<a href="01-launch.html">1 · Launch</a>
+<a href="02-go-live.html">2 · Go live</a>
+<a href="03-match-starts.html">3 · Match starts</a>
+<a href="04-bad-release.html">4 · Bad release</a>
+<a href="05-things-break.html">5 · Things break</a>
+<a href="06-security-review.html">6 · Security review</a>
+<a href="07-housekeeping.html">7 · Housekeeping</a>
+<div class="group">Reference</div>
+<a href="troubleshooting.html">Troubleshooting</a>
+</nav>
+<button class="theme" id="theme" type="button">Toggle light / dark</button>
+</aside>
+<main>
+<div class="content">
+<div class="eyebrow">Hands-on Kubernetes project</div>
+<h1>Match Day Poll</h1>
+<p class="lede">Build and operate a small live-voting system on Kubernetes: replicas, scaling, releases, failures and security, driven by one evening of traffic.</p>
+
+<h2>The story</h2>
+<p>A cricket site runs a live poll: <b>"Who wins tonight?"</b> Before the match it is quiet. When the match starts, thousands of fans vote at once. The site has to stay up and scale. A new release will go wrong and has to be rolled back. A pod and a node will die. An auditor will ask who can reach what. And the database must never lose a vote.</p>
+<p>You build the whole thing on a local Kubernetes cluster, one evening at a time. Each act is a problem from that story.</p>
+
+<h2>The system</h2>
+<div class="flow">
+<div class="box"><b>Browser</b><span>you</span></div><span class="arrow">→</span>
+<div class="box"><b>Ingress</b><span>localhost:8080</span></div><span class="arrow">→</span>
+<div class="box hot"><b>frontend</b><span>2 replicas</span></div><span class="arrow">→</span>
+<div class="box hot"><b>backend</b><span>3 replicas</span></div><span class="arrow">→</span>
+<div class="box"><b>redis</b><span>live totals</span></div>
+<span class="arrow">+</span>
+<div class="box"><b>postgres</b><span>every vote, on a volume</span></div>
+</div>
+<p>The frontend serves the poll page and forwards <code>/api/*</code> to the backend. The backend writes each vote to Postgres and keeps running totals in Redis. The frontend never talks to the database, and Act 6 makes the cluster enforce that.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Part</th><th>Image</th><th>You build / use</th><th>Workload</th></tr></thead>
+<tbody>
+<tr><td>Frontend</td><td><code>poll-frontend</code></td><td>Built from <code>app/frontend/Dockerfile</code></td><td>Deployment, 2 replicas</td></tr>
+<tr><td>Backend</td><td><code>poll-backend</code></td><td>Built from <code>app/backend/Dockerfile</code></td><td>Deployment, 3 replicas</td></tr>
+<tr><td>Database</td><td><code>postgres:16-alpine</code></td><td>Existing official image</td><td>StatefulSet, 1 replica, volume</td></tr>
+<tr><td>Cache</td><td><code>redis:7-alpine</code></td><td>Existing official image</td><td>Deployment, 1 replica</td></tr>
+</tbody>
+</table></div>
+
+<p>No registry is used. You build the two images locally and load them straight into the cluster. Only the base images (Python, nginx, Postgres, Redis) are pulled from a public registry when you build or deploy.</p>
+
+<h2>How this guide works</h2>
+<p>The application code and the Dockerfiles are ready in <code>app/</code>. <b>You write everything else</b>: the cluster config, every Kubernetes manifest, and the load script. Put manifests in <code>k8s/</code> and scripts in <code>scripts/</code>.</p>
+<p>Each <b>mission</b> has a goal, the files you write, a check to run, and optional help. Try it yourself first, then open help only as needed:</p>
+<ul>
+<li><b>Predict first</b> (green): think about what will happen before you run the check.</li>
+<li><b>Hint 1, Hint 2</b> (amber): a nudge, then a stronger nudge.</li>
+<li><b>Full solution</b> (blue): the working file. Compare it with yours after you finish.</li>
+</ul>
+<p>The tick on each mission is saved in your browser only.</p>
+<p>This guide assumes you already know Kubernetes basics. It explains what to do, not what a Deployment is.</p>
+
+<h2>You need</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Tool</th><th>Why</th><th>Check</th></tr></thead>
+<tbody>
+<tr><td>Docker</td><td>Build images and run the cluster nodes</td><td><code>docker version</code></td></tr>
+<tr><td>kind</td><td>Local multi-node cluster</td><td><code>kind version</code></td></tr>
+<tr><td>kubectl</td><td>Talk to the cluster</td><td><code>kubectl version --client</code></td></tr>
+<tr><td>bash, curl</td><td>Scripts (on Windows use Git Bash or WSL)</td><td><code>bash --version</code></td></tr>
+</tbody>
+</table></div>
+
+<p>About 6 GB of free memory is enough for a 3-node cluster plus the app.</p>
+
+<h2>The names the app expects</h2>
+<p>The code looks these up by name, so your manifests must use them exactly.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>What</th><th>Name</th></tr></thead>
+<tbody>
+<tr><td>Namespace</td><td><code>poll</code></td></tr>
+<tr><td>Services</td><td><code>frontend</code> (port 80, forwards to container port 8080), <code>backend</code> (8000), <code>redis</code> (6379), <code>postgres</code> (5432, headless)</td></tr>
+<tr><td>Images</td><td><code>poll-frontend:1.0</code>, <code>poll-backend:1.0</code> (later <code>1.1</code> and <code>1.2-broken</code>)</td></tr>
+<tr><td>Secret</td><td><code>db-credentials</code> with keys <code>username</code> and <code>password</code></td></tr>
+<tr><td>ConfigMap</td><td><code>poll-config</code> with keys <code>DB_HOST</code>, <code>DB_PORT</code>, <code>DB_NAME</code>, <code>REDIS_HOST</code>, <code>TEAMS</code>, <code>CPU_COST_MS</code></td></tr>
+<tr><td>Container ports</td><td>backend <code>8000</code>, frontend <code>8080</code>, redis <code>6379</code>, postgres <code>5432</code></td></tr>
+<tr><td>Labels</td><td>every workload and its pods carry <code>app: &lt;name&gt;</code> (<code>frontend</code>, <code>backend</code>, <code>redis</code>, <code>postgres</code>); Jobs use <code>app: backend-job</code></td></tr>
+</tbody>
+</table></div>
+
+<h3>Backend environment variables</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Variable</th><th>Default</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>DB_HOST</code>, <code>DB_PORT</code>, <code>DB_NAME</code></td><td>postgres, 5432, poll</td><td>Where the database is</td></tr>
+<tr><td><code>DB_USER</code>, <code>DB_PASSWORD</code></td><td>poll, (empty)</td><td>Credentials. Come from the Secret</td></tr>
+<tr><td><code>REDIS_HOST</code>, <code>REDIS_PORT</code></td><td>redis, 6379</td><td>Where Redis is</td></tr>
+<tr><td><code>TEAMS</code></td><td>India,Australia</td><td>The two options on the poll</td></tr>
+<tr><td><code>CPU_COST_MS</code></td><td>5</td><td>Busy-work per vote, so load costs real CPU</td></tr>
+<tr><td><code>NODE_NAME</code></td><td>unknown</td><td>Fill from the Downward API; the page shows which node answered</td></tr>
+</tbody>
+</table></div>
+
+<h3>Backend endpoints</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Endpoint</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>GET /health</code></td><td>Liveness. Never checks dependencies</td></tr>
+<tr><td><code>GET /ready</code></td><td>Readiness. Returns 503 until the database tables exist. Redis is optional</td></tr>
+<tr><td><code>POST /vote</code></td><td>Body <code>{"team": "India"}</code></td></tr>
+<tr><td><code>GET /results</code></td><td>Totals. From Redis; rebuilt from Postgres when the cache is empty. Version 1.1 and later add percentages</td></tr>
+<tr><td><code>GET /version</code></td><td>Which pod, node and version answered</td></tr>
+</tbody>
+</table></div>
+
+<p>Through the frontend these are <code>/api/vote</code>, <code>/api/results</code> and so on. The frontend also has <code>GET /healthz</code>.</p>
+
+<h2>Suggested file plan</h2>
+<p>Numbers keep the apply order obvious. You are free to organise differently.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>File</th><th>Contents</th></tr></thead>
+<tbody>
+<tr><td><code>k8s/kind-cluster.yaml</code></td><td>The cluster definition</td></tr>
+<tr><td><code>k8s/00-namespace.yaml</code></td><td>Namespace</td></tr>
+<tr><td><code>k8s/01-config.yaml</code></td><td>Secret and ConfigMap</td></tr>
+<tr><td><code>k8s/10-postgres.yaml</code>, <code>20-redis.yaml</code></td><td>Data tier</td></tr>
+<tr><td><code>k8s/30-backend.yaml</code>, <code>40-migrate-job.yaml</code>, <code>50-frontend.yaml</code></td><td>App tier and database setup</td></tr>
+<tr><td><code>k8s/60-ingress.yaml</code>, <code>70-hpa.yaml</code>, <code>80-pdb.yaml</code></td><td>Entry point, autoscaling, disruption budget</td></tr>
+<tr><td><code>k8s/90-netpol.yaml</code>, <code>91-rbac.yaml</code></td><td>Security</td></tr>
+<tr><td><code>k8s/95-reset-job.yaml</code>, <code>96-cronjob.yaml</code></td><td>Housekeeping</td></tr>
+<tr><td><code>scripts/load.sh</code>, <code>up.sh</code>, <code>down.sh</code></td><td>Load generator, build everything, tear it down</td></tr>
+</tbody>
+</table></div>
+
+<h2>The acts</h2>
+<div class="cards">
+<a class="card" href="00-setup.html"><div class="k">ACT 0</div><div class="t">Setup</div><div class="d">Build the images, create the cluster, add the ingress controller and metrics.</div></a>
+<a class="card" href="01-launch.html"><div class="k">ACT 1</div><div class="t">Launch</div><div class="d">Config, database, cache, backend, frontend.</div></a>
+<a class="card" href="02-go-live.html"><div class="k">ACT 2</div><div class="t">Go live</div><div class="d">Ingress, probes, resources, spreading replicas.</div></a>
+<a class="card" href="03-match-starts.html"><div class="k">ACT 3</div><div class="t">Match starts</div><div class="d">A load script, autoscaling, watching replicas share work.</div></a>
+<a class="card" href="04-bad-release.html"><div class="k">ACT 4</div><div class="t">Bad release</div><div class="d">Rolling update, a broken version, rollback, disruption budget.</div></a>
+<a class="card" href="05-things-break.html"><div class="k">ACT 5</div><div class="t">Things break</div><div class="d">Kill pods, the cache, the database, drain a node.</div></a>
+<a class="card" href="06-security-review.html"><div class="k">ACT 6</div><div class="t">Security review</div><div class="d">Network policies, RBAC, non-root containers.</div></a>
+<a class="card" href="07-housekeeping.html"><div class="k">ACT 7</div><div class="t">Housekeeping</div><div class="d">A reset Job, a nightly CronJob, one script that rebuilds it all.</div></a>
+</div>
+
+<div class="pager"><span></span><a href="00-setup.html">0 · Setup →</a></div>
+</div>
+</main>
+</div>
+<script src="assets/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Troubleshooting · Match Day Poll</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="topbar"><button id="nav-open" type="button" aria-label="Open navigation">Menu</button><strong>Match Day Poll</strong></div>
+<div class="shell">
+<aside class="side">
+<a class="brand" href="index.html"><span class="dot"></span>Match Day Poll</a>
+<nav class="nav" aria-label="Guide">
+<div class="group">Guide</div>
+<a href="index.html">Start here</a>
+<div class="group">Missions</div>
+<a href="00-setup.html">0 · Setup</a>
+<a href="01-launch.html">1 · Launch</a>
+<a href="02-go-live.html">2 · Go live</a>
+<a href="03-match-starts.html">3 · Match starts</a>
+<a href="04-bad-release.html">4 · Bad release</a>
+<a href="05-things-break.html">5 · Things break</a>
+<a href="06-security-review.html">6 · Security review</a>
+<a href="07-housekeeping.html">7 · Housekeeping</a>
+<div class="group">Reference</div>
+<a href="troubleshooting.html" aria-current="page">Troubleshooting</a>
+</nav>
+<button class="theme" id="theme" type="button">Toggle light / dark</button>
+</aside>
+<main>
+<div class="content">
+<div class="eyebrow">Reference</div>
+<h1>Troubleshooting</h1>
+<p class="lede">What the common failures look like in this project and how to fix them.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Symptom</th><th>Usual cause</th><th>What to do</th></tr></thead>
+<tbody>
+<tr><td><code>ImagePullBackOff</code> or <code>ErrImagePull</code> on <code>poll-*</code></td><td>The image exists only in your local Docker, not inside the cluster</td><td><code>kind load docker-image &lt;image&gt; --name poll</code> after every build</td></tr>
+<tr><td>Frontend <code>CrashLoopBackOff</code>, log says <code>host not found in upstream "backend"</code></td><td>The <code>backend</code> Service does not exist yet. nginx resolves it at start</td><td>Create the backend Service first; the pod recovers on its next restart</td></tr>
+<tr><td>Backend pods Running but <code>0/1</code>, <code>/ready</code> says <code>waiting_for: database</code></td><td>The tables do not exist, or Postgres is not ready</td><td>Run the migration Job; check <code>kubectl get pods</code> for <code>postgres-0</code></td></tr>
+<tr><td>Postgres crashes with <code>directory exists but is not empty</code> or mentions <code>lost+found</code></td><td>The data directory is the volume's root</td><td>Set <code>PGDATA</code> to a sub-folder such as <code>/var/lib/postgresql/data/pgdata</code></td></tr>
+<tr><td>PVC stays <code>Pending</code></td><td>The storage class waits for a pod that uses the volume</td><td>Normal until the pod is scheduled. If the pod is Pending too, <code>kubectl describe pod</code></td></tr>
+<tr><td>HPA shows <code>&lt;unknown&gt;/50%</code></td><td>metrics-server is not ready, or the pods have no CPU request</td><td><code>kubectl top pods</code>; check the add-on and the <code>--kubelet-insecure-tls</code> patch; add a CPU request</td></tr>
+<tr><td>HPA never scales up</td><td>The load is too small for the CPU request</td><td>Run more workers in <code>load.sh</code>, or raise <code>CPU_COST_MS</code> and restart the backend</td></tr>
+<tr><td><code>localhost:8080</code> refuses the connection</td><td>No port mapping, ingress controller not ready, or port 8080 already in use</td><td>Check the kind config mapping, <code>kubectl get pods -n ingress-nginx</code>; free the port or change <code>hostPort</code></td></tr>
+<tr><td><code>localhost:8080</code> returns 404 from nginx</td><td>The Ingress is missing or has the wrong class</td><td><code>kubectl get ingress</code>; use <code>ingressClassName: nginx</code></td></tr>
+<tr><td>The page shows <code>502</code> or <code>Cannot load results</code></td><td>The backend has no ready pods</td><td><code>kubectl get pods -l app=backend</code> and <code>kubectl get endpoints backend</code></td></tr>
+<tr><td>Pods turn NotReady after applying network policies</td><td>Probe traffic from the node may be blocked by your network plugin's policy implementation</td><td><code>kubectl describe pod</code> shows probe failures. Delete <code>default-deny-ingress</code> to confirm, then check your CNI's documentation on host traffic</td></tr>
+<tr><td>A policy has no effect at all</td><td>The network plugin does not enforce NetworkPolicy</td><td>Use a cluster whose CNI enforces policies, then repeat the timeout check</td></tr>
+<tr><td><code>kubectl drain</code> keeps retrying</td><td>A PodDisruptionBudget would be violated</td><td>Wait for replacement pods to be Ready, or check <code>kubectl get pdb</code></td></tr>
+<tr><td>A node stays <code>SchedulingDisabled</code></td><td>A drain cordons the node and does not undo it</td><td><code>kubectl uncordon &lt;node&gt;</code></td></tr>
+<tr><td>Change to a ConfigMap has no effect</td><td>Environment variables are read once at pod start</td><td><code>kubectl rollout restart deploy/backend</code></td></tr>
+<tr><td><code>kubectl apply</code> brought back an old image</td><td>A manual <code>set image</code> or <code>rollout undo</code> changed the cluster but not your file</td><td>Edit the file to the version you want, then apply</td></tr>
+<tr><td><code>load.sh</code> is slow or fails on Windows</td><td>Process start-up is slow in some shells</td><td>Use WSL or Git Bash, and fewer workers</td></tr>
+</tbody>
+</table></div>
+<h2>Useful commands</h2>
+<pre data-title="toolbox"><code>kubectl get pods -o wide                     # where, which IP
+kubectl describe pod NAME                    # events at the bottom
+kubectl logs NAME --previous                 # the log of the crashed container
+kubectl get events --sort-by=.lastTimestamp
+kubectl get endpoints backend                # which pods receive traffic
+kubectl exec deploy/backend -- printenv      # what the container actually sees
+kubectl rollout history deploy/backend
+kubectl auth can-i VERB RESOURCE --as=system:serviceaccount:poll:NAME</code></pre>
+<h2>Clean up</h2>
+<pre data-title="remove everything"><code>kind delete cluster --name poll</code></pre>
+
+<div class="pager"><a href="07-housekeeping.html">← 7 · Housekeeping</a><span></span></div>
+</div>
+</main>
+</div>
+<script src="assets/app.js"></script>
+</body>
+</html>

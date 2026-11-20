@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Act 5 · Things break · Match Day Poll</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="topbar"><button id="nav-open" type="button" aria-label="Open navigation">Menu</button><strong>Match Day Poll</strong></div>
+<div class="shell">
+<aside class="side">
+<a class="brand" href="index.html"><span class="dot"></span>Match Day Poll</a>
+<nav class="nav" aria-label="Guide">
+<div class="group">Guide</div>
+<a href="index.html">Start here</a>
+<div class="group">Missions</div>
+<a href="00-setup.html">0 · Setup</a>
+<a href="01-launch.html">1 · Launch</a>
+<a href="02-go-live.html">2 · Go live</a>
+<a href="03-match-starts.html">3 · Match starts</a>
+<a href="04-bad-release.html">4 · Bad release</a>
+<a href="05-things-break.html" aria-current="page">5 · Things break</a>
+<a href="06-security-review.html">6 · Security review</a>
+<a href="07-housekeeping.html">7 · Housekeeping</a>
+<div class="group">Reference</div>
+<a href="troubleshooting.html">Troubleshooting</a>
+</nav>
+<button class="theme" id="theme" type="button">Toggle light / dark</button>
+</aside>
+<main>
+<div class="content">
+<div class="eyebrow">The second half</div>
+<h1>Act 5 · Things break</h1>
+<p class="lede">Kill a pod, the cache, the database and a whole node. Predict first, then watch the system recover or fail.</p>
+<div class="callout"><b>Story:</b> the second half. Things start failing, one component at a time. For each failure, predict what the fans see, then break it and compare. Keep <code>scripts/load.sh</code> running in a second terminal for the first three missions.</div>
+<section class="mission" id="m1">
+<header><span class="num">5.1</span><h3>A backend pod dies mid-match</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Delete one backend pod while traffic flows, and count the failed requests.</p>
+<h4>Check</h4>
+<pre><code># terminal 2: scripts/load.sh http://localhost:8080 90 10
+# terminal 1, while it runs:
+for i in $(seq 1 300); do curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/api/results; done | sort | uniq -c &amp;
+kubectl delete pod $(kubectl get pods -l app=backend -o name | head -1)
+wait
+kubectl get pods -l app=backend</code></pre>
+<p class="expect"><b>Expect:</b> A replacement pod appears within seconds. Almost all requests return <code>200</code>; a few might fail with <code>502</code>, the requests that were in flight to the pod that died.</p>
+<details class="predict"><summary>Predict first: is any failed request acceptable, and what would reduce them?</summary><div class="body">A few in-flight failures are normal when a pod is killed abruptly. Graceful shutdown (handling SIGTERM and finishing requests), a <code>preStop</code> delay and client retries reduce them. Replicas make sure the service stays up; they do not make single requests immortal.</div></details>
+</section>
+<section class="mission" id="m2">
+<header><span class="num">5.2</span><h3>The cache disappears</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Delete the Redis pod. Compare the totals and the <code>source</code> field before and after.</p>
+<h4>Check</h4>
+<pre><code>curl -s localhost:8080/api/results
+kubectl delete pod -l app=redis
+curl -s localhost:8080/api/results
+sleep 15
+curl -s localhost:8080/api/results
+kubectl get pods -l app=redis</code></pre>
+<p class="expect"><b>Expect:</b> The totals are identical each time. Right after the restart <code>source</code> is <code>database</code> (the backend rebuilt the cache from Postgres), and later <code>cache</code> again. The backend pods never leave Ready.</p>
+<details class="predict"><summary>Predict first: are votes lost while Redis is down?</summary><div class="body">No. Votes are written to Postgres first. Redis only holds a copy of the totals, and the backend treats it as optional on purpose: <code>/ready</code> does not check it.</div></details>
+</section>
+<section class="mission" id="m3">
+<header><span class="num">5.3</span><h3>The database pod dies</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Delete <code>postgres-0</code> and compare the vote count before and after.</p>
+<h4>Check</h4>
+<pre><code>kubectl exec postgres-0 -- psql -U poll -d poll -tc 'SELECT count(*) FROM votes'
+kubectl delete pod postgres-0
+kubectl get pods -w          # Ctrl+C when postgres-0 and the backends are Ready again
+kubectl exec postgres-0 -- psql -U poll -d poll -tc 'SELECT count(*) FROM votes'</code></pre>
+<p class="expect"><b>Expect:</b> The same count after the restart. For about 20 to 40 seconds the backends turn <code>0/1</code> and the page shows errors, then everything recovers without a restart of the backends.</p>
+<details class="predict"><summary>Predict first: why did the data survive, and why was the site down meanwhile?</summary><div class="body">The pod was recreated with the same name and re-attached to the same PersistentVolumeClaim, so the data stayed. The site was down because there is one database replica: a single replica of a stateful component is a single point of failure.</div></details>
+</section>
+<section class="mission" id="m4">
+<header><span class="num">5.4</span><h3>Drain a node for maintenance</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Take a worker out of service the polite way. First find which worker hosts <code>postgres-0</code> and drain the <b>other</b> one. Your PodDisruptionBudgets decide the pace.</p>
+<h4>Check</h4>
+<pre><code>kubectl get pods -o wide
+kubectl drain &lt;the worker WITHOUT postgres-0&gt; --ignore-daemonsets --delete-emptydir-data --timeout=180s
+kubectl get pods -o wide
+kubectl get nodes
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/api/results
+kubectl uncordon &lt;that worker&gt;</code></pre>
+<p class="expect"><b>Expect:</b> The node shows <code>SchedulingDisabled</code>, and its pods move to the other worker. The drain may print <code>Cannot evict pod as it would violate the pod's disruption budget</code> and retry: that is the PDB working. The site keeps answering <code>200</code>. After <code>uncordon</code>, nothing moves back by itself.</p>
+<details class="hint"><summary>Hint 1</summary><div class="body">To rebalance after uncordoning: <code>kubectl rollout restart deploy/backend deploy/frontend</code>. The spread constraint places the new pods evenly again.</div></details>
+<details class="hint"><summary>Hint 2</summary><div class="body">A drain cordons first and never uncordons. If it fails half way the node stays cordoned. Always check <code>kubectl get nodes</code> afterwards.</div></details>
+</section>
+<section class="mission" id="m5">
+<header><span class="num">5.5</span><h3>Stretch: drain the node that holds the database</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Now drain the worker that hosts <code>postgres-0</code>. Predict what happens, then do it.</p>
+<h4>Check</h4>
+<pre><code>kubectl drain &lt;the worker WITH postgres-0&gt; --ignore-daemonsets --delete-emptydir-data --timeout=60s
+kubectl get pods -o wide
+kubectl describe pod postgres-0 | tail -8
+kubectl uncordon &lt;that worker&gt;</code></pre>
+<p class="expect"><b>Expect:</b> <code>postgres-0</code> is evicted and then stays <code>Pending</code>. The events mention a <code>volume node affinity conflict</code>. After <code>uncordon</code> it starts again.</p>
+<details class="predict"><summary>Predict first: why can't postgres-0 start on the other worker?</summary><div class="body">On kind the volume is a local folder on one specific node. The PersistentVolume carries a node affinity, so any pod using it must run on that node. With network-attached storage (a cloud disk) it could move; local storage ties the pod to its node.</div></details>
+</section>
+
+<div class="pager"><a href="04-bad-release.html">← 4 · Bad release</a><a href="06-security-review.html">6 · Security review →</a></div>
+</div>
+</main>
+</div>
+<script src="assets/app.js"></script>
+</body>
+</html>

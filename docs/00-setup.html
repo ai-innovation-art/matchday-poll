@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Act 0 · Setup · Match Day Poll</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="topbar"><button id="nav-open" type="button" aria-label="Open navigation">Menu</button><strong>Match Day Poll</strong></div>
+<div class="shell">
+<aside class="side">
+<a class="brand" href="index.html"><span class="dot"></span>Match Day Poll</a>
+<nav class="nav" aria-label="Guide">
+<div class="group">Guide</div>
+<a href="index.html">Start here</a>
+<div class="group">Missions</div>
+<a href="00-setup.html" aria-current="page">0 · Setup</a>
+<a href="01-launch.html">1 · Launch</a>
+<a href="02-go-live.html">2 · Go live</a>
+<a href="03-match-starts.html">3 · Match starts</a>
+<a href="04-bad-release.html">4 · Bad release</a>
+<a href="05-things-break.html">5 · Things break</a>
+<a href="06-security-review.html">6 · Security review</a>
+<a href="07-housekeeping.html">7 · Housekeeping</a>
+<div class="group">Reference</div>
+<a href="troubleshooting.html">Troubleshooting</a>
+</nav>
+<button class="theme" id="theme" type="button">Toggle light / dark</button>
+</aside>
+<main>
+<div class="content">
+<div class="eyebrow">Before the story starts</div>
+<h1>Act 0 · Setup</h1>
+<p class="lede">Images built, a three-node cluster running, and the add-ons installed. Nothing of the poll exists yet.</p>
+<div class="callout">Run all commands from the repository root unless a mission says otherwise.</div>
+<section class="mission" id="m1">
+<header><span class="num">0.1</span><h3>Check your tools</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Make sure Docker, kind and kubectl work.</p>
+<h4>Check</h4>
+<pre><code>docker version --format '{{.Server.Version}}'
+kind version
+kubectl version --client</code></pre>
+<p class="expect"><b>Expect:</b> Three version outputs, no errors. If Docker fails, start Docker Desktop (or the Docker service).</p>
+</section>
+<section class="mission" id="m2">
+<header><span class="num">0.2</span><h3>Build the images</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Build the backend and frontend images from the Dockerfiles in <code>app/</code>.</p>
+<h4>Check</h4>
+<pre><code>docker build -t poll-backend:1.0 app/backend
+docker build -t poll-frontend:1.0 app/frontend
+docker images | grep poll
+docker run --rm poll-backend:1.0 python -c "import main; print(main.VERSION)"</code></pre>
+<p class="expect"><b>Expect:</b> Two images listed, and the last command prints <code>1.0</code>.</p>
+<details class="hint"><summary>Hint 1</summary><div class="body">The Dockerfile has the exact <code>docker build</code> command in its first comment lines.</div></details>
+<details class="hint"><summary>Hint 2</summary><div class="body">The backend image starts even without a database. It connects only when a request needs it.</div></details>
+</section>
+<section class="mission" id="m3">
+<header><span class="num">0.3</span><h3>Create the cluster</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Write a kind config for a cluster named <code>poll</code> with one control-plane and two workers. Publish the ingress controller's port 80 on your machine's port <b>8080</b>.</p>
+<p class="writes"><b>You write:</b> <code>k8s/kind-cluster.yaml</code></p>
+<h4>Check</h4>
+<pre><code>kind create cluster --config k8s/kind-cluster.yaml
+kubectl get nodes
+kubectl config current-context</code></pre>
+<p class="expect"><b>Expect:</b> Three nodes <code>Ready</code> (<code>poll-control-plane</code>, <code>poll-worker</code>, <code>poll-worker2</code>) and context <code>kind-poll</code>.</p>
+<details class="predict"><summary>Predict first: which node can run the ingress controller?</summary><div class="body">Only a node that is both labelled for it and reachable on host port 8080. The control-plane node carries the port mapping, so it also needs a label the controller selects on.</div></details>
+<details class="hint"><summary>Hint 1</summary><div class="body">Look at the kind docs for <code>extraPortMappings</code> (containerPort 80, hostPort 8080) and <code>kubeadmConfigPatches</code> with <code>node-labels</code>.</div></details>
+<details class="hint"><summary>Hint 2</summary><div class="body">The ingress controller manifest for kind selects nodes with the label <code>ingress-ready=true</code>. Put the mapping and the label on the control-plane node only.</div></details>
+<details class="solution"><summary>Full solution</summary><div class="body"><pre data-title="k8s/kind-cluster.yaml"><code>kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: poll
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 8080
+        protocol: TCP
+  - role: worker
+  - role: worker</code></pre>
+</div></details>
+</section>
+<section class="mission" id="m4">
+<header><span class="num">0.4</span><h3>Load the images into the cluster</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">The cluster cannot see images in your local Docker. Copy them into every node. There is no registry.</p>
+<h4>Check</h4>
+<pre><code>kind load docker-image poll-backend:1.0 poll-frontend:1.0 --name poll
+docker exec poll-worker crictl images | grep poll</code></pre>
+<p class="expect"><b>Expect:</b> Both images listed on the worker node.</p>
+<details class="hint"><summary>Hint 1</summary><div class="body">Whenever you build a new tag, load it again. A pod with <code>ImagePullBackOff</code> on a local image almost always means this step was skipped.</div></details>
+</section>
+<section class="mission" id="m5">
+<header><span class="num">0.5</span><h3>Add the ingress controller and metrics</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Install two cluster add-ons: the NGINX ingress controller (for the 8080 URL) and metrics-server (needed for autoscaling and <code>kubectl top</code>). These are commands, not files you write.</p>
+<h4>Check</h4>
+<pre><code>kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.2/deploy/static/provider/kind/deploy.yaml
+kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=180s
+
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/download/v0.7.2/components.yaml
+kubectl patch -n kube-system deployment metrics-server --type=json -p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
+kubectl top nodes</code></pre>
+<p class="expect"><b>Expect:</b> The controller pod becomes Ready. After a minute <code>kubectl top nodes</code> prints CPU and memory per node.</p>
+<details class="hint"><summary>Hint 1</summary><div class="body">The <code>--kubelet-insecure-tls</code> patch is needed because kind nodes use self-signed kubelet certificates. Do not use it in production.</div></details>
+<details class="hint"><summary>Hint 2</summary><div class="body">If <code>kubectl top</code> says metrics are not available yet, wait 60 seconds and retry.</div></details>
+</section>
+
+<div class="pager"><a href="index.html">← Start here</a><a href="01-launch.html">1 · Launch →</a></div>
+</div>
+</main>
+</div>
+<script src="assets/app.js"></script>
+</body>
+</html>

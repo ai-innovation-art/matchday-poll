@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Match Day Poll</title>
+<style>
+  :root { --bg:#0e1a16; --card:#15251f; --fg:#e8f1ec; --muted:#94aba0; --a:#4ac28a; --b:#e8a33d; --line:#26382f; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font-family:system-ui,-apple-system,"Segoe UI",sans-serif; line-height:1.5;
+         padding:24px max(16px, env(safe-area-inset-left)); }
+  main { max-width:640px; margin:0 auto; display:flex; flex-direction:column; gap:20px; }
+  h1 { margin:0; font-size:26px; }
+  .sub { color:var(--muted); margin:4px 0 0; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; }
+  .buttons { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  button { font:inherit; font-weight:600; padding:14px; border-radius:10px; border:2px solid var(--line); background:transparent; color:var(--fg); cursor:pointer; }
+  button:hover { border-color:var(--a); }
+  button:focus-visible { outline:2px solid var(--a); outline-offset:2px; }
+  .row { margin-top:16px; }
+  .label { display:flex; justify-content:space-between; font-size:15px; margin-bottom:6px; }
+  .bar { height:14px; background:#0b1410; border-radius:7px; overflow:hidden; }
+  .fill { height:100%; width:0; transition:width .4s; }
+  .meta { color:var(--muted); font-size:13px; font-family:ui-monospace,Consolas,monospace; word-break:break-all; }
+  .err { background:#3a1d1d; border:1px solid #6b2d2d; color:#ffb4a8; padding:10px 14px; border-radius:8px; display:none; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Who wins tonight?</h1>
+    <p class="sub">Cast your vote. The totals update live.</p>
+  </header>
+
+  <div id="err" class="err" role="alert"></div>
+
+  <section class="card">
+    <div class="buttons" id="buttons"></div>
+    <div id="bars"></div>
+  </section>
+
+  <p class="meta" id="meta">connecting…</p>
+</main>
+
+<script>
+const colors = ["var(--a)", "var(--b)", "#6aa6ff", "#d36ad3"];
+let teams = [];
+
+function setError(msg) {
+  const e = document.getElementById("err");
+  e.textContent = msg || "";
+  e.style.display = msg ? "block" : "none";
+}
+
+function draw(data) {
+  if (JSON.stringify(teams) !== JSON.stringify(data.teams)) {
+    teams = data.teams;
+    document.getElementById("buttons").innerHTML = teams.map((t, i) =>
+      `<button data-team="${t}" style="border-color:${colors[i % 4]}">Vote ${t}</button>`).join("");
+    document.getElementById("bars").innerHTML = teams.map((t, i) =>
+      `<div class="row"><div class="label"><span>${t}</span><span id="n-${i}"></span></div>
+       <div class="bar"><div class="fill" id="f-${i}" style="background:${colors[i % 4]}"></div></div></div>`).join("");
+  }
+  const total = data.total || 0;
+  teams.forEach((t, i) => {
+    const n = data.totals[t] || 0;
+    const pct = total ? (100 * n / total) : 0;
+    document.getElementById("f-" + i).style.width = pct + "%";
+    document.getElementById("n-" + i).textContent =
+      data.percent ? `${n} votes · ${data.percent[t]}%` : `${n} votes`;
+  });
+  document.getElementById("meta").textContent =
+    `total ${total} · answered by pod ${data.pod} on ${data.node} · backend v${data.version} · totals from ${data.source}`;
+}
+
+async function refresh() {
+  try {
+    const r = await fetch("/api/results");
+    if (!r.ok) throw new Error("backend answered " + r.status);
+    draw(await r.json());
+    setError("");
+  } catch (e) {
+    setError("Cannot load results: " + e.message);
+  }
+}
+
+document.getElementById("buttons").addEventListener("click", async (ev) => {
+  const team = ev.target.dataset && ev.target.dataset.team;
+  if (!team) return;
+  try {
+    const r = await fetch("/api/vote", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ team }),
+    });
+    if (!r.ok) throw new Error("vote failed: " + r.status);
+    setError("");
+    refresh();
+  } catch (e) {
+    setError(e.message);
+  }
+});
+
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

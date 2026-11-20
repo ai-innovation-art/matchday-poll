@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Act 2 · Go live · Match Day Poll</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="topbar"><button id="nav-open" type="button" aria-label="Open navigation">Menu</button><strong>Match Day Poll</strong></div>
+<div class="shell">
+<aside class="side">
+<a class="brand" href="index.html"><span class="dot"></span>Match Day Poll</a>
+<nav class="nav" aria-label="Guide">
+<div class="group">Guide</div>
+<a href="index.html">Start here</a>
+<div class="group">Missions</div>
+<a href="00-setup.html">0 · Setup</a>
+<a href="01-launch.html">1 · Launch</a>
+<a href="02-go-live.html" aria-current="page">2 · Go live</a>
+<a href="03-match-starts.html">3 · Match starts</a>
+<a href="04-bad-release.html">4 · Bad release</a>
+<a href="05-things-break.html">5 · Things break</a>
+<a href="06-security-review.html">6 · Security review</a>
+<a href="07-housekeeping.html">7 · Housekeeping</a>
+<div class="group">Reference</div>
+<a href="troubleshooting.html">Troubleshooting</a>
+</nav>
+<button class="theme" id="theme" type="button">Toggle light / dark</button>
+</aside>
+<main>
+<div class="content">
+<div class="eyebrow">Match day, 18:00</div>
+<h1>Act 2 · Go live</h1>
+<p class="lede">Public access, health checks, resource sizing and placement. Four small changes that decide how the system behaves under stress.</p>
+<div class="callout"><b>Story:</b> match day. The site is opened to the public. Make it reachable, make Kubernetes aware of what healthy means, and stop one node from holding everything.</div>
+<section class="mission" id="m1">
+<header><span class="num">2.1</span><h3>Open the front door</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Create an Ingress that sends all traffic for <code>/</code> to the <code>frontend</code> Service, using the <code>nginx</code> ingress class.</p>
+<p class="writes"><b>You write:</b> <code>k8s/60-ingress.yaml</code></p>
+<h4>Check</h4>
+<pre><code>kubectl apply -f k8s/60-ingress.yaml
+kubectl get ingress
+curl -s localhost:8080/api/version
+for i in 1 2 3 4 5 6; do curl -s localhost:8080/api/version | grep -o '"pod":"[^"]*"'; done</code></pre>
+<p class="expect"><b>Expect:</b> The poll opens at <b>http://localhost:8080</b>. The six calls show the backend pod names changing: the replicas share the traffic.</p>
+<details class="predict"><summary>Predict first: why do different backend pods answer even though you always call the same URL?</summary><div class="body">Each browser or curl request creates a new connection through the frontend to the <code>backend</code> Service, and the Service picks a pod for each connection.</div></details>
+<details class="hint"><summary>Hint 1</summary><div class="body">It is an <code>networking.k8s.io/v1</code> Ingress with <code>ingressClassName: nginx</code>, one rule with no host, path <code>/</code> and type <code>Prefix</code>.</div></details>
+<details class="solution"><summary>Full solution</summary><div class="body"><pre data-title="k8s/60-ingress.yaml"><code>apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: poll
+  namespace: poll
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80</code></pre>
+</div></details>
+</section>
+<section class="mission" id="m2">
+<header><span class="num">2.2</span><h3>Teach Kubernetes what healthy means</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Add readiness and liveness probes. Readiness controls whether a pod receives traffic. Liveness controls whether it is restarted. The backend's <code>/ready</code> already checks the database, and <code>/health</code> deliberately checks nothing.</p>
+<p class="writes"><b>You write:</b> <code>k8s/30-backend.yaml</code>, <code>k8s/50-frontend.yaml</code>, <code>k8s/10-postgres.yaml</code>, <code>k8s/20-redis.yaml</code></p>
+<h4>Check</h4>
+<pre><code>kubectl apply -f k8s/
+kubectl get pods
+# now break the database on purpose:
+kubectl scale statefulset postgres --replicas=0
+kubectl get pods -l app=backend -w      # watch for 20 seconds, then Ctrl+C
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/api/results
+kubectl scale statefulset postgres --replicas=1</code></pre>
+<p class="expect"><b>Expect:</b> With Postgres gone the backend pods turn <code>0/1</code> within about 10 seconds but are <b>not restarted</b>. The site returns an error status. After you scale Postgres back, the pods turn Ready again by themselves.</p>
+<details class="predict"><summary>Predict first: which probe fails when Postgres is down, and why must the other one not?</summary><div class="body">Readiness fails, so the pods are removed from the Service. If liveness also failed, Kubernetes would restart healthy pods in a loop for a problem restarting cannot fix.</div></details>
+<details class="hint"><summary>Hint 1</summary><div class="body">Backend: readiness on <code>/ready</code>, liveness on <code>/health</code>, both on the named port <code>http</code>. Give liveness an <code>initialDelaySeconds</code>.</div></details>
+<details class="hint"><summary>Hint 2</summary><div class="body">Frontend: both probes can use <code>/healthz</code> on port 8080. Redis: an <code>exec</code> probe with <code>redis-cli ping</code>. Postgres: an <code>exec</code> probe with <code>pg_isready</code>.</div></details>
+<details class="solution"><summary>Full solution</summary><div class="body"><pre data-title="backend container (30-backend.yaml)"><code>          readinessProbe:
+            httpGet: { path: /ready, port: http }
+            periodSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10</code></pre>
+<pre data-title="frontend container (50-frontend.yaml)"><code>          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10</code></pre>
+<pre data-title="redis container (20-redis.yaml)"><code>          readinessProbe:
+            exec: { command: ["redis-cli", "ping"] }
+            periodSeconds: 5</code></pre>
+<pre data-title="postgres container (10-postgres.yaml)"><code>          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            periodSeconds: 5</code></pre>
+</div></details>
+</section>
+<section class="mission" id="m3">
+<header><span class="num">2.3</span><h3>Requests and limits</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Give every container resource requests, and a memory limit. Do <b>not</b> set CPU limits on the backend: you will autoscale on CPU use relative to the request, and a CPU limit would throttle it first.</p>
+<p class="writes"><b>You write:</b> <code>k8s/10-postgres.yaml</code>, <code>k8s/20-redis.yaml</code>, <code>k8s/30-backend.yaml</code>, <code>k8s/50-frontend.yaml</code></p>
+<h4>Check</h4>
+<pre><code>kubectl apply -f k8s/
+kubectl get pods -o custom-columns=NAME:.metadata.name,QOS:.status.qosClass
+kubectl describe node poll-worker | grep -A8 'Allocated resources'</code></pre>
+<p class="expect"><b>Expect:</b> Every pod is <code>Burstable</code>. The node description shows the sum of requests.</p>
+<details class="predict"><summary>Predict first: which QoS class do these pods get?</summary><div class="body">Burstable: they have requests, but the limits differ from the requests and there is no CPU limit. Guaranteed would need requests equal to limits for CPU and memory.</div></details>
+<details class="hint"><summary>Hint 1</summary><div class="body">Suggested sizes. Backend: 100m CPU / 128Mi, limit 256Mi memory. Frontend: 20m / 32Mi, limit 64Mi. Redis: 50m / 32Mi, limit 128Mi. Postgres: 100m / 256Mi, limit 512Mi.</div></details>
+<details class="solution"><summary>Full solution</summary><div class="body"><pre data-title="backend (same shape for the others)"><code>          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { memory: 256Mi }</code></pre>
+</div></details>
+</section>
+<section class="mission" id="m4">
+<header><span class="num">2.4</span><h3>Do not put all the pods on one node</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Add a topology spread constraint to the backend and frontend so replicas spread across nodes. Use <code>ScheduleAnyway</code> so a lopsided cluster never leaves a pod Pending.</p>
+<p class="writes"><b>You write:</b> <code>k8s/30-backend.yaml</code>, <code>k8s/50-frontend.yaml</code></p>
+<h4>Check</h4>
+<pre><code>kubectl apply -f k8s/
+kubectl rollout restart deploy/backend deploy/frontend
+kubectl rollout status deploy/backend
+kubectl get pods -l 'app in (backend,frontend)' -o wide</code></pre>
+<p class="expect"><b>Expect:</b> The 3 backends sit 2 + 1 on the two workers, and the 2 frontends sit 1 + 1. No pod runs on the control-plane node, because it is tainted.</p>
+<details class="hint"><summary>Hint 1</summary><div class="body">The constraint goes in the pod spec (next to <code>containers</code>), with <code>topologyKey: kubernetes.io/hostname</code> and a <code>labelSelector</code> that matches the pods' own <code>app</code> label.</div></details>
+<details class="solution"><summary>Full solution</summary><div class="body"><pre data-title="pod spec of each Deployment (change the label)"><code>      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app: backend }</code></pre>
+</div></details>
+</section>
+
+<div class="pager"><a href="01-launch.html">← 1 · Launch</a><a href="03-match-starts.html">3 · Match starts →</a></div>
+</div>
+</main>
+</div>
+<script src="assets/app.js"></script>
+</body>
+</html>

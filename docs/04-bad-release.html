@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Act 4 · Bad release · Match Day Poll</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="topbar"><button id="nav-open" type="button" aria-label="Open navigation">Menu</button><strong>Match Day Poll</strong></div>
+<div class="shell">
+<aside class="side">
+<a class="brand" href="index.html"><span class="dot"></span>Match Day Poll</a>
+<nav class="nav" aria-label="Guide">
+<div class="group">Guide</div>
+<a href="index.html">Start here</a>
+<div class="group">Missions</div>
+<a href="00-setup.html">0 · Setup</a>
+<a href="01-launch.html">1 · Launch</a>
+<a href="02-go-live.html">2 · Go live</a>
+<a href="03-match-starts.html">3 · Match starts</a>
+<a href="04-bad-release.html" aria-current="page">4 · Bad release</a>
+<a href="05-things-break.html">5 · Things break</a>
+<a href="06-security-review.html">6 · Security review</a>
+<a href="07-housekeeping.html">7 · Housekeeping</a>
+<div class="group">Reference</div>
+<a href="troubleshooting.html">Troubleshooting</a>
+</nav>
+<button class="theme" id="theme" type="button">Toggle light / dark</button>
+</aside>
+<main>
+<div class="content">
+<div class="eyebrow">Halftime</div>
+<h1>Act 4 · Bad release</h1>
+<p class="lede">A zero-downtime release, a release that never becomes ready, and the two ways back.</p>
+<div class="callout"><b>Story:</b> at halftime the team ships a new feature (percentages on the poll). Then a second release goes out with a bug. Both happen with real fans voting, so neither may cause downtime.</div>
+<section class="mission" id="m1">
+<header><span class="num">4.1</span><h3>Make releases safe</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Configure the backend Deployment's update strategy: during an update, never drop below the desired number of ready pods, and add at most one extra pod. Keep five old versions for rollback, fail a stuck rollout after 60 seconds, and record a reason for each release.</p>
+<p class="writes"><b>You write:</b> <code>k8s/30-backend.yaml</code></p>
+<h4>Check</h4>
+<pre><code>kubectl apply -f k8s/30-backend.yaml
+kubectl get deploy backend -o jsonpath='{.spec.strategy}{"\n"}'</code></pre>
+<p class="expect"><b>Expect:</b> The strategy shows <code>maxSurge: 1</code> and <code>maxUnavailable: 0</code>.</p>
+<details class="hint"><summary>Hint 1</summary><div class="body">Fields: <code>strategy.rollingUpdate.maxSurge</code>, <code>maxUnavailable</code>, <code>revisionHistoryLimit</code>, <code>progressDeadlineSeconds</code>, and the annotation <code>kubernetes.io/change-cause</code>.</div></details>
+<details class="solution"><summary>Full solution</summary><div class="body"><pre data-title="Deployment metadata and spec (30-backend.yaml)"><code>metadata:
+  name: backend
+  namespace: poll
+  labels: { app: backend }
+  annotations:
+    kubernetes.io/change-cause: "1.0 initial release"
+spec:
+  replicas: 3
+  revisionHistoryLimit: 5
+  progressDeadlineSeconds: 60
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0</code></pre>
+</div></details>
+</section>
+<section class="mission" id="m2">
+<header><span class="num">4.2</span><h3>Ship version 1.1 without downtime</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Build <code>poll-backend:1.1</code>, load it into the cluster, and roll it out by changing the image in your manifest. While it rolls, watch the status codes from a second terminal.</p>
+<p class="writes"><b>You write:</b> <code>k8s/30-backend.yaml</code></p>
+<h4>Check</h4>
+<pre><code>docker build --build-arg APP_VERSION=1.1 -t poll-backend:1.1 app/backend
+kind load docker-image poll-backend:1.1 --name poll
+# terminal 2:
+while true; do curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/api/results; sleep 0.2; done | uniq -c
+# terminal 1: change the image to poll-backend:1.1 (and the change-cause), then
+kubectl apply -f k8s/30-backend.yaml
+kubectl rollout status deploy/backend</code></pre>
+<p class="expect"><b>Expect:</b> Terminal 2 shows only <code>200</code>: no failed request during the rollout. The page now shows percentages and <code>backend v1.1</code>.</p>
+<details class="predict"><summary>Predict first: how many backend pods exist at the busiest moment of the rollout?</summary><div class="body">Four: 3 desired plus 1 surge. With <code>maxUnavailable: 0</code> an old pod is removed only after a new one is Ready.</div></details>
+<details class="hint"><summary>Hint 1</summary><div class="body">Edit the <code>image:</code> line and apply the file. Avoid <code>kubectl set image</code>: it changes the cluster but not your manifest, and your file is the record of what runs.</div></details>
+</section>
+<section class="mission" id="m3">
+<header><span class="num">4.3</span><h3>Ship a broken version</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Build <code>poll-backend:1.2-broken</code> with the build arguments from the Dockerfile's comment, load it, and roll it out. It starts but never becomes ready.</p>
+<h4>Check</h4>
+<pre><code>docker build --build-arg APP_VERSION=1.2 --build-arg BROKEN=true -t poll-backend:1.2-broken app/backend
+kind load docker-image poll-backend:1.2-broken --name poll
+# change the image to poll-backend:1.2-broken, then
+kubectl apply -f k8s/30-backend.yaml
+kubectl rollout status deploy/backend --timeout=75s
+kubectl get pods -l app=backend
+kubectl get deploy backend</code></pre>
+<p class="expect"><b>Expect:</b> The rollout does not finish: <code>progress deadline exceeded</code>. One new pod sits at <code>0/1</code> while the three good pods keep serving. Terminal 2 from the previous mission would still show only <code>200</code>.</p>
+<details class="predict"><summary>Predict first: how many pods are Running, and which version answers requests?</summary><div class="body">Four Running (one of them not Ready): the three 1.1 pods answer. The new pod is never added to the Service because its readiness check fails.</div></details>
+</section>
+<section class="mission" id="m4">
+<header><span class="num">4.4</span><h3>Roll back</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Return to the last good version and check what Kubernetes remembers.</p>
+<h4>Check</h4>
+<pre><code>kubectl rollout history deploy/backend
+kubectl rollout undo deploy/backend
+kubectl rollout status deploy/backend
+curl -s localhost:8080/api/version</code></pre>
+<p class="expect"><b>Expect:</b> History lists several revisions. After the undo, the version shown is <code>1.1</code> again.</p>
+<details class="predict"><summary>Predict first: what happens if you now run <code>kubectl apply -f k8s/30-backend.yaml</code> again?</summary><div class="body">It redeploys the broken image, because your file still names it. <code>rollout undo</code> changes the cluster, not your manifest. Set the file back to <code>poll-backend:1.1</code>.</div></details>
+<details class="hint"><summary>Hint 1</summary><div class="body">Fix the file first, then apply it: that is the declarative way to roll back. <code>undo</code> is the quick emergency lever.</div></details>
+</section>
+<section class="mission" id="m5">
+<header><span class="num">4.5</span><h3>Protect against voluntary disruption</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Add PodDisruptionBudgets: at least 2 backend pods and at least 1 frontend pod must stay available during voluntary disruptions such as node drains.</p>
+<p class="writes"><b>You write:</b> <code>k8s/80-pdb.yaml</code></p>
+<h4>Check</h4>
+<pre><code>kubectl apply -f k8s/80-pdb.yaml
+kubectl get pdb</code></pre>
+<p class="expect"><b>Expect:</b> <code>ALLOWED DISRUPTIONS</code> is the replica count minus the minimum (for example 3 backends, minimum 2: allowed 1). You will use this in Act 5.</p>
+<details class="solution"><summary>Full solution</summary><div class="body"><pre data-title="k8s/80-pdb.yaml"><code>apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: backend
+  namespace: poll
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels: { app: backend }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: frontend
+  namespace: poll
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: frontend }</code></pre>
+</div></details>
+</section>
+<section class="mission" id="m6">
+<header><span class="num">4.6</span><h3>Checkpoint: compare your backend manifest</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Open this only when you are done with this act. It is the complete backend manifest as it should look now, with everything from Acts 1 to 4. Differences are fine as long as the behaviour matches.</p>
+<details class="solution"><summary>Full solution</summary><div class="body"><pre data-title="k8s/30-backend.yaml (checkpoint)"><code>apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: poll
+  labels: { app: backend }
+spec:
+  selector: { app: backend }
+  ports:
+    - { name: http, port: 8000, targetPort: http }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: poll
+  labels: { app: backend }
+  annotations:
+    kubernetes.io/change-cause: "1.1 adds percentages"
+spec:
+  replicas: 3
+  revisionHistoryLimit: 5
+  progressDeadlineSeconds: 60
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels: { app: backend }
+  template:
+    metadata:
+      labels: { app: backend }
+    spec:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app: backend }
+      containers:
+        - name: backend
+          image: poll-backend:1.1
+          ports:
+            - { name: http, containerPort: 8000 }
+          envFrom:
+            - configMapRef: { name: poll-config }
+          env:
+            - { name: DB_USER, valueFrom: { secretKeyRef: { name: db-credentials, key: username } } }
+            - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: db-credentials, key: password } } }
+            - { name: NODE_NAME, valueFrom: { fieldRef: { fieldPath: spec.nodeName } } }
+          readinessProbe:
+            httpGet: { path: /ready, port: http }
+            periodSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { memory: 256Mi }</code></pre>
+</div></details>
+</section>
+
+<div class="pager"><a href="03-match-starts.html">← 3 · Match starts</a><a href="05-things-break.html">5 · Things break →</a></div>
+</div>
+</main>
+</div>
+<script src="assets/app.js"></script>
+</body>
+</html>

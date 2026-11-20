@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Act 6 · Security review · Match Day Poll</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="topbar"><button id="nav-open" type="button" aria-label="Open navigation">Menu</button><strong>Match Day Poll</strong></div>
+<div class="shell">
+<aside class="side">
+<a class="brand" href="index.html"><span class="dot"></span>Match Day Poll</a>
+<nav class="nav" aria-label="Guide">
+<div class="group">Guide</div>
+<a href="index.html">Start here</a>
+<div class="group">Missions</div>
+<a href="00-setup.html">0 · Setup</a>
+<a href="01-launch.html">1 · Launch</a>
+<a href="02-go-live.html">2 · Go live</a>
+<a href="03-match-starts.html">3 · Match starts</a>
+<a href="04-bad-release.html">4 · Bad release</a>
+<a href="05-things-break.html">5 · Things break</a>
+<a href="06-security-review.html" aria-current="page">6 · Security review</a>
+<a href="07-housekeeping.html">7 · Housekeeping</a>
+<div class="group">Reference</div>
+<a href="troubleshooting.html">Troubleshooting</a>
+</nav>
+<button class="theme" id="theme" type="button">Toggle light / dark</button>
+</aside>
+<main>
+<div class="content">
+<div class="eyebrow">After the match</div>
+<h1>Act 6 · Security review</h1>
+<p class="lede">Network policies, a least-privilege identity, and containers locked down. Each change comes with a command that proves it.</p>
+<div class="callout"><b>Story:</b> after the match an auditor reviews the setup and asks four questions. Who can reach the database? Who can read the cluster? What can the containers do on the node? And what proves it?</div>
+<section class="mission" id="m1">
+<header><span class="num">6.1</span><h3>Prove the problem first</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Right now every pod can talk to every other pod. Show that the <b>frontend</b> can open a connection to the database.</p>
+<h4>Check</h4>
+<pre><code>kubectl exec deploy/frontend -- wget -T 3 -qO- http://postgres:5432</code></pre>
+<p class="expect"><b>Expect:</b> It returns within a second with a protocol error such as <code>error getting response</code>. That error proves the connection was accepted: the frontend can reach the database. Remember this result, you will compare it.</p>
+</section>
+<section class="mission" id="m2">
+<header><span class="num">6.2</span><h3>Only the right pods may talk</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Write network policies so that: nothing is allowed in by default; only the ingress controller may reach the frontend (port 8080); only the frontend may reach the backend (8000); only the backend and backend Jobs may reach Redis (6379) and Postgres (5432).</p>
+<p class="writes"><b>You write:</b> <code>k8s/90-netpol.yaml</code></p>
+<h4>Check</h4>
+<pre><code>kubectl apply -f k8s/90-netpol.yaml
+kubectl exec deploy/frontend -- wget -T 3 -qO- http://postgres:5432
+kubectl get pods
+curl -s localhost:8080/api/results
+curl -s -X POST -H 'Content-Type: application/json' -d '{"team":"India"}' localhost:8080/api/vote
+kubectl run tmp --rm -it --image=busybox:1.36 --restart=Never -- wget -T 3 -qO- http://backend:8000/health</code></pre>
+<p class="expect"><b>Expect:</b> The frontend-to-database command now waits three seconds and ends with <code>download timed out</code>. All pods stay <code>Ready</code>. The site and voting still work through the Ingress. The throwaway pod, which has no allowed label, times out too.</p>
+<details class="predict"><summary>Predict first: which policy makes the unlabeled throwaway pod fail?</summary><div class="body">The default-deny policy selects every pod, so a pod is reachable only if another policy allows the source. The backend's allow rule accepts only pods labelled <code>app: frontend</code>.</div></details>
+<details class="hint"><summary>Hint 1</summary><div class="body">Start with a policy whose <code>podSelector</code> is empty and that lists only <code>policyTypes: [Ingress]</code> with no rules. Then add one allow policy per target.</div></details>
+<details class="hint"><summary>Hint 2</summary><div class="body">The ingress controller lives in another namespace: use a <code>namespaceSelector</code> on <code>kubernetes.io/metadata.name: ingress-nginx</code>. For Redis and Postgres, match <code>app</code> with <code>matchExpressions</code> and operator <code>In</code> for the values <code>backend</code> and <code>backend-job</code>.</div></details>
+<details class="hint"><summary>Hint 3</summary><div class="body">If pods go NotReady after applying the policies, see the Troubleshooting page.</div></details>
+<details class="solution"><summary>Full solution</summary><div class="body"><pre data-title="k8s/90-netpol.yaml"><code>apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: poll
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-controller-to-frontend
+  namespace: poll
+spec:
+  podSelector:
+    matchLabels: { app: frontend }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: ingress-nginx }
+      ports:
+        - { protocol: TCP, port: 8080 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-frontend-to-backend
+  namespace: poll
+spec:
+  podSelector:
+    matchLabels: { app: backend }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: frontend }
+      ports:
+        - { protocol: TCP, port: 8000 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backend-to-redis
+  namespace: poll
+spec:
+  podSelector:
+    matchLabels: { app: redis }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - { key: app, operator: In, values: [backend, backend-job] }
+      ports:
+        - { protocol: TCP, port: 6379 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backend-to-postgres
+  namespace: poll
+spec:
+  podSelector:
+    matchLabels: { app: postgres }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - { key: app, operator: In, values: [backend, backend-job] }
+      ports:
+        - { protocol: TCP, port: 5432 }</code></pre>
+</div></details>
+</section>
+<section class="mission" id="m3">
+<header><span class="num">6.3</span><h3>A read-only identity for the support team</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Create a ServiceAccount <code>poll-viewer</code> that can read pods, their logs, services, endpoints, ConfigMaps, volume claims, workloads and Jobs in the <code>poll</code> namespace, and nothing else. It must <b>not</b> be able to read Secrets. Also create a ServiceAccount <code>backend</code> that does not mount an API token.</p>
+<p class="writes"><b>You write:</b> <code>k8s/91-rbac.yaml</code></p>
+<h4>Check</h4>
+<pre><code>kubectl apply -f k8s/91-rbac.yaml
+SA=system:serviceaccount:poll:poll-viewer
+kubectl auth can-i list pods --as=$SA
+kubectl auth can-i get pods/log --as=$SA
+kubectl auth can-i delete pods --as=$SA
+kubectl auth can-i get secrets --as=$SA
+kubectl auth can-i list pods -n kube-system --as=$SA</code></pre>
+<p class="expect"><b>Expect:</b> <code>yes</code>, <code>yes</code>, <code>no</code>, <code>no</code>, <code>no</code>.</p>
+<details class="predict"><summary>Predict first: why is the last answer no even though the first is yes?</summary><div class="body">A Role only grants access inside its own namespace. Access to <code>kube-system</code> would need a binding there, or a ClusterRole.</div></details>
+<details class="hint"><summary>Hint 1</summary><div class="body">You need four objects: two ServiceAccounts, a Role and a RoleBinding. Set <code>automountServiceAccountToken: false</code> on the <code>backend</code> ServiceAccount.</div></details>
+<details class="hint"><summary>Hint 2</summary><div class="body">Rules are grouped by API group: the core group is <code>""</code>, Deployments and StatefulSets are in <code>apps</code>, Jobs in <code>batch</code>. Use verbs <code>get</code>, <code>list</code>, <code>watch</code> only.</div></details>
+<details class="solution"><summary>Full solution</summary><div class="body"><pre data-title="k8s/91-rbac.yaml"><code>apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: poll-viewer
+  namespace: poll
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: backend
+  namespace: poll
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: viewer
+  namespace: poll
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "services", "endpoints", "configmaps", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: viewer
+  namespace: poll
+subjects:
+  - kind: ServiceAccount
+    name: poll-viewer
+    namespace: poll
+roleRef:
+  kind: Role
+  name: viewer
+  apiGroup: rbac.authorization.k8s.io</code></pre>
+</div></details>
+</section>
+<section class="mission" id="m4">
+<header><span class="num">6.4</span><h3>Containers that cannot do much</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Make the backend and frontend run as non-root with a read-only filesystem and no extra Linux capabilities. The backend should use the <code>backend</code> ServiceAccount. Give each a writable <code>/tmp</code> from an <code>emptyDir</code>.</p>
+<p class="writes"><b>You write:</b> <code>k8s/30-backend.yaml</code>, <code>k8s/50-frontend.yaml</code></p>
+<h4>Check</h4>
+<pre><code>kubectl apply -f k8s/
+kubectl rollout status deploy/backend
+kubectl rollout status deploy/frontend
+kubectl exec deploy/backend -- id
+kubectl exec deploy/backend -- touch /app/x
+kubectl exec deploy/backend -- touch /tmp/x
+kubectl exec deploy/backend -- ls /var/run/secrets/kubernetes.io/serviceaccount
+kubectl get pods</code></pre>
+<p class="expect"><b>Expect:</b> <code>uid=10001</code>; the write to <code>/app</code> fails with <code>Read-only file system</code>; the write to <code>/tmp</code> works; the last <code>ls</code> says <code>No such file or directory</code> (no API token); all pods <code>Ready</code>.</p>
+<details class="predict"><summary>Predict first: what would break if you removed the emptyDir for the frontend?</summary><div class="body">nginx writes its pid file and temporary files under <code>/tmp</code>. With a read-only root filesystem and no writable <code>/tmp</code> it fails to start.</div></details>
+<details class="hint"><summary>Hint 1</summary><div class="body">Pod-level <code>securityContext</code>: <code>runAsNonRoot: true</code> and a <code>seccompProfile</code> of <code>RuntimeDefault</code>. Container-level: <code>allowPrivilegeEscalation: false</code>, <code>readOnlyRootFilesystem: true</code>, <code>capabilities.drop: [ALL]</code>.</div></details>
+<details class="hint"><summary>Hint 2</summary><div class="body">Both images already declare a numeric non-root user, which is what <code>runAsNonRoot</code> checks.</div></details>
+<details class="solution"><summary>Full solution</summary><div class="body"><pre data-title="backend pod spec additions (30-backend.yaml)"><code>    spec:
+      serviceAccountName: backend
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: backend
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: tmp, emptyDir: {} }</code></pre>
+<pre data-title="frontend pod spec additions (50-frontend.yaml)"><code>    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: frontend
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: tmp, emptyDir: {} }</code></pre>
+</div></details>
+</section>
+<section class="mission" id="m5">
+<header><span class="num">6.5</span><h3>Stretch: ask the cluster which workloads are not hardened</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Label the namespace so Kubernetes warns about pods that violate the <code>restricted</code> pod security standard, then see which of your workloads fail it.</p>
+<h4>Check</h4>
+<pre><code>kubectl label namespace poll pod-security.kubernetes.io/warn=restricted --overwrite
+kubectl apply -f k8s/10-postgres.yaml -f k8s/20-redis.yaml</code></pre>
+<p class="expect"><b>Expect:</b> Warnings naming Postgres and Redis for missing settings such as <code>allowPrivilegeEscalation</code>, capabilities, <code>runAsNonRoot</code> and a seccomp profile. Backend and frontend, which you hardened in the last mission, produce none. Fixing the two official images is the stretch: both need a specific user and a writable data folder.</p>
+<details class="hint"><summary>Hint 1</summary><div class="body"><code>warn</code> only prints a warning. <code>enforce</code> would reject the pods, and <code>audit</code> would record them in the audit log. Try <code>enforce=baseline</code> as a gentler next step.</div></details>
+</section>
+
+<div class="pager"><a href="05-things-break.html">← 5 · Things break</a><a href="07-housekeeping.html">7 · Housekeeping →</a></div>
+</div>
+</main>
+</div>
+<script src="assets/app.js"></script>
+</body>
+</html>

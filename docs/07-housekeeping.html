@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Act 7 · Housekeeping · Match Day Poll</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="topbar"><button id="nav-open" type="button" aria-label="Open navigation">Menu</button><strong>Match Day Poll</strong></div>
+<div class="shell">
+<aside class="side">
+<a class="brand" href="index.html"><span class="dot"></span>Match Day Poll</a>
+<nav class="nav" aria-label="Guide">
+<div class="group">Guide</div>
+<a href="index.html">Start here</a>
+<div class="group">Missions</div>
+<a href="00-setup.html">0 · Setup</a>
+<a href="01-launch.html">1 · Launch</a>
+<a href="02-go-live.html">2 · Go live</a>
+<a href="03-match-starts.html">3 · Match starts</a>
+<a href="04-bad-release.html">4 · Bad release</a>
+<a href="05-things-break.html">5 · Things break</a>
+<a href="06-security-review.html">6 · Security review</a>
+<a href="07-housekeeping.html" aria-current="page">7 · Housekeeping</a>
+<div class="group">Reference</div>
+<a href="troubleshooting.html">Troubleshooting</a>
+</nav>
+<button class="theme" id="theme" type="button">Toggle light / dark</button>
+</aside>
+<main>
+<div class="content">
+<div class="eyebrow">Next match</div>
+<h1>Act 7 · Housekeeping</h1>
+<p class="lede">A reset Job, a scheduled snapshot, and a script that rebuilds the whole system from your files.</p>
+<div class="callout"><b>Story:</b> match over. Prepare for the next one: clear the poll with a one-off Job, take a snapshot of the totals every few minutes with a CronJob, and prove you can rebuild the whole system from your files with one command.</div>
+<section class="mission" id="m1">
+<header><span class="num">7.1</span><h3>Reset the poll with a Job</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Write a Job that runs <code>python tools.py reset</code> in the backend image. It deletes all votes and clears the Redis cache. Its pod label must be <code>app: backend-job</code> so your network policies allow it to reach the database and Redis.</p>
+<p class="writes"><b>You write:</b> <code>k8s/95-reset-job.yaml</code></p>
+<h4>Check</h4>
+<pre><code>curl -s localhost:8080/api/results
+kubectl apply -f k8s/95-reset-job.yaml
+kubectl wait --for=condition=complete job/poll-reset --timeout=90s
+kubectl logs job/poll-reset
+curl -s localhost:8080/api/results</code></pre>
+<p class="expect"><b>Expect:</b> The log says <code>reset: votes deleted, cache cleared</code>, and the totals are 0.</p>
+<details class="predict"><summary>Predict first: what happens if you apply the same Job file a second time?</summary><div class="body">Nothing runs: a finished Job is not run again by <code>apply</code>, and its pod template is immutable. Delete the Job first (<code>kubectl delete job poll-reset</code>), then apply it again.</div></details>
+<details class="solution"><summary>Full solution</summary><div class="body"><pre data-title="k8s/95-reset-job.yaml"><code>apiVersion: batch/v1
+kind: Job
+metadata:
+  name: poll-reset
+  namespace: poll
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels: { app: backend-job }
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: reset
+          image: poll-backend:1.1
+          command: ["python", "tools.py", "reset"]
+          envFrom:
+            - configMapRef: { name: poll-config }
+          env:
+            - { name: DB_USER, valueFrom: { secretKeyRef: { name: db-credentials, key: username } } }
+            - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: db-credentials, key: password } } }</code></pre>
+</div></details>
+</section>
+<section class="mission" id="m2">
+<header><span class="num">7.2</span><h3>A nightly snapshot with a CronJob</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Write a CronJob that runs <code>python tools.py snapshot</code> on a schedule. For this exercise run it every 2 minutes. Never allow two runs at once, and keep only the last two successful and the last failed Job.</p>
+<p class="writes"><b>You write:</b> <code>k8s/96-cronjob.yaml</code></p>
+<h4>Check</h4>
+<pre><code>kubectl apply -f k8s/96-cronjob.yaml
+# vote a few times, then wait about 4 minutes
+kubectl get cronjob,jobs
+kubectl logs job/$(kubectl get jobs -o name | tail -1 | cut -d/ -f2)
+kubectl exec postgres-0 -- psql -U poll -d poll -c 'SELECT id, taken_at, total FROM snapshots'
+kubectl patch cronjob snapshot -p '{"spec":{"suspend":true}}'</code></pre>
+<p class="expect"><b>Expect:</b> Jobs named <code>snapshot-&lt;number&gt;</code> appear every two minutes, only the last few are kept, the log shows <code>snapshot: total=…</code>, and the <code>snapshots</code> table fills up. After the suspend patch, no new Job appears.</p>
+<details class="hint"><summary>Hint 1</summary><div class="body">Fields to set: <code>schedule</code>, <code>concurrencyPolicy: Forbid</code>, <code>successfulJobsHistoryLimit</code>, <code>failedJobsHistoryLimit</code>, and a <code>jobTemplate</code> that looks like the reset Job.</div></details>
+<details class="hint"><summary>Hint 2</summary><div class="body">Remember the pod label <code>app: backend-job</code> inside the <code>jobTemplate</code>, not on the CronJob itself.</div></details>
+<details class="solution"><summary>Full solution</summary><div class="body"><pre data-title="k8s/96-cronjob.yaml"><code>apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: snapshot
+  namespace: poll
+spec:
+  schedule: "*/2 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels: { app: backend-job }
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: snapshot
+              image: poll-backend:1.1
+              command: ["python", "tools.py", "snapshot"]
+              envFrom:
+                - configMapRef: { name: poll-config }
+              env:
+                - { name: DB_USER, valueFrom: { secretKeyRef: { name: db-credentials, key: username } } }
+                - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: db-credentials, key: password } } }</code></pre>
+</div></details>
+</section>
+<section class="mission" id="m3">
+<header><span class="num">7.3</span><h3>Rebuild everything with one command</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
+<p class="goal">Write <code>scripts/up.sh</code>, which creates the cluster, builds and loads the images, installs the add-ons, and applies your manifests in the right order. Write <code>scripts/down.sh</code>, which deletes the cluster. Then prove it: delete the cluster, run <code>up.sh</code>, and open the poll.</p>
+<p class="writes"><b>You write:</b> <code>scripts/up.sh</code>, <code>scripts/down.sh</code></p>
+<h4>Check</h4>
+<pre><code>chmod +x scripts/*.sh
+scripts/down.sh
+scripts/up.sh
+curl -s localhost:8080/api/results
+kubectl get pods,hpa,pdb,networkpolicy,cronjob -n poll</code></pre>
+<p class="expect"><b>Expect:</b> From nothing, the poll answers at <b>http://localhost:8080</b>. Pods are Ready, and the HPA, PDBs, network policies and CronJob exist.</p>
+<details class="predict"><summary>Predict first: what order must things be created in, and which step can fail if you get it wrong?</summary><div class="body">Namespace and config first, then the database, then the migration Job, then the backend and frontend, then the ingress, policies and the rest. The frontend crashes at start if the <code>backend</code> Service is missing, and the backend is never ready until the migration Job has run.</div></details>
+<details class="hint"><summary>Hint 1</summary><div class="body"><code>kubectl wait</code> and <code>kubectl rollout status</code> let the script pause until a step is done. Add <code>set -euo pipefail</code> at the top so it stops at the first error.</div></details>
+<details class="hint"><summary>Hint 2</summary><div class="body">The images <code>up.sh</code> builds must match the tags in your manifests. After Act 4 that is <code>poll-backend:1.1</code>, so change the migration Job's image to 1.1 too.</div></details>
+<details class="solution"><summary>Full solution</summary><div class="body"><pre data-title="scripts/up.sh"><code>#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+kind create cluster --config k8s/kind-cluster.yaml
+
+docker build --build-arg APP_VERSION=1.1 -t poll-backend:1.1 app/backend
+docker build -t poll-frontend:1.0 app/frontend
+kind load docker-image poll-backend:1.1 poll-frontend:1.0 --name poll
+
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.2/deploy/static/provider/kind/deploy.yaml
+kubectl wait --namespace ingress-nginx --for=condition=ready pod \
+  --selector=app.kubernetes.io/component=controller --timeout=180s
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/download/v0.7.2/components.yaml
+kubectl patch -n kube-system deployment metrics-server --type=json \
+  -p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
+
+kubectl apply -f k8s/00-namespace.yaml -f k8s/01-config.yaml
+kubectl apply -f k8s/10-postgres.yaml -f k8s/20-redis.yaml
+kubectl rollout status statefulset/postgres -n poll --timeout=180s
+kubectl apply -f k8s/40-migrate-job.yaml
+kubectl wait --for=condition=complete job/db-migrate -n poll --timeout=120s
+kubectl apply -f k8s/30-backend.yaml -f k8s/50-frontend.yaml
+kubectl rollout status deploy/backend -n poll --timeout=180s
+kubectl rollout status deploy/frontend -n poll --timeout=180s
+kubectl apply -f k8s/60-ingress.yaml -f k8s/70-hpa.yaml -f k8s/80-pdb.yaml
+kubectl apply -f k8s/90-netpol.yaml -f k8s/91-rbac.yaml -f k8s/96-cronjob.yaml
+
+echo "Ready: http://localhost:8080"</code></pre>
+<pre data-title="scripts/down.sh"><code>#!/usr/bin/env bash
+kind delete cluster --name poll</code></pre>
+</div></details>
+</section>
+<div class="callout"><b>Where to go next.</b> Package the manifests with Helm or Kustomize and run the same app in two environments. Add egress policies, a <code>ResourceQuota</code> and <code>LimitRange</code>, a <code>PriorityClass</code>, TLS on the Ingress with cert-manager, and Prometheus and Grafana to watch it all. Then run the same files on a real multi-node cluster.</div>
+
+<div class="pager"><a href="06-security-review.html">← 6 · Security review</a><a href="troubleshooting.html">Troubleshooting →</a></div>
+</div>
+</main>
+</div>
+<script src="assets/app.js"></script>
+</body>
+</html>
