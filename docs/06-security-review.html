@@ -48,6 +48,17 @@
 <header><span class="num">6.2</span><h3>Only the right pods may talk</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
 <p class="goal">Write network policies so that: nothing is allowed in by default; only the ingress controller may reach the frontend (port 8080); only the frontend may reach the backend (8000); only the backend and backend Jobs may reach Redis (6379) and Postgres (5432).</p>
 <p class="writes"><b>You write:</b> <code>k8s/90-netpol.yaml</code></p>
+<h4>Values to use</h4>
+<div class="table-wrap"><table>
+<thead><tr><th>Policy</th><th>Applies to pods</th><th>Allows traffic from</th><th>Port</th></tr></thead>
+<tbody>
+<tr><td>default deny</td><td>all pods</td><td>nobody</td><td>-</td></tr>
+<tr><td>frontend</td><td><code>app: frontend</code></td><td>namespace <code>ingress-nginx</code> (label <code>kubernetes.io/metadata.name</code>)</td><td>8080</td></tr>
+<tr><td>backend</td><td><code>app: backend</code></td><td>pods <code>app: frontend</code></td><td>8000</td></tr>
+<tr><td>redis</td><td><code>app: redis</code></td><td>pods with <code>app</code> in (<code>backend</code>, <code>backend-job</code>)</td><td>6379</td></tr>
+<tr><td>postgres</td><td><code>app: postgres</code></td><td>pods with <code>app</code> in (<code>backend</code>, <code>backend-job</code>)</td><td>5432</td></tr>
+</tbody>
+</table></div>
 <h4>Check</h4>
 <pre><code>kubectl apply -f k8s/90-netpol.yaml
 kubectl exec deploy/frontend -- wget -T 3 -qO- http://postgres:5432
@@ -140,6 +151,16 @@ spec:
 <header><span class="num">6.3</span><h3>A read-only identity for the support team</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
 <p class="goal">Create a ServiceAccount <code>poll-viewer</code> that can read pods, their logs, services, endpoints, ConfigMaps, volume claims, workloads and Jobs in the <code>poll</code> namespace, and nothing else. It must <b>not</b> be able to read Secrets. Also create a ServiceAccount <code>backend</code> that does not mount an API token.</p>
 <p class="writes"><b>You write:</b> <code>k8s/91-rbac.yaml</code></p>
+<h4>Values to use</h4>
+<div class="table-wrap"><table>
+<thead><tr><th>Object</th><th>Name</th><th>Details</th></tr></thead>
+<tbody>
+<tr><td>ServiceAccount</td><td><code>poll-viewer</code></td><td>the read-only identity</td></tr>
+<tr><td>ServiceAccount</td><td><code>backend</code></td><td><code>automountServiceAccountToken: false</code></td></tr>
+<tr><td>Role</td><td><code>viewer</code></td><td>core group: pods, pods/log, services, endpoints, configmaps, persistentvolumeclaims; apps: deployments, replicasets, statefulsets; batch: jobs, cronjobs. Verbs: get, list, watch. <b>No secrets.</b></td></tr>
+<tr><td>RoleBinding</td><td><code>viewer</code></td><td>binds the Role to <code>poll-viewer</code></td></tr>
+</tbody>
+</table></div>
 <h4>Check</h4>
 <pre><code>kubectl apply -f k8s/91-rbac.yaml
 SA=system:serviceaccount:poll:poll-viewer

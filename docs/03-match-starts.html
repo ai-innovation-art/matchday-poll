@@ -74,6 +74,16 @@ echo "load: done"</code></pre>
 <header><span class="num">3.2</span><h3>Let the cluster scale the backend</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
 <p class="goal">Create a HorizontalPodAutoscaler for the backend: between 3 and 8 replicas, aiming for 50% average CPU use relative to the request. Make it scale down after 60 seconds of calm instead of the default five minutes.</p>
 <p class="writes"><b>You write:</b> <code>k8s/70-hpa.yaml</code></p>
+<h4>Values to use</h4>
+<div class="table-wrap"><table>
+<thead><tr><th>Setting</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td>Target</td><td>Deployment <code>backend</code></td></tr>
+<tr><td>Replicas</td><td>min <code>3</code>, max <code>8</code></td></tr>
+<tr><td>Metric</td><td>CPU, <code>Utilization</code>, <code>averageUtilization: 50</code></td></tr>
+<tr><td>Scale-down</td><td><code>stabilizationWindowSeconds: 60</code></td></tr>
+</tbody>
+</table></div>
 <h4>Check</h4>
 <pre><code>kubectl apply -f k8s/70-hpa.yaml
 kubectl get hpa

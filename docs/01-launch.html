@@ -56,6 +56,21 @@ metadata:
 <header><span class="num">1.2</span><h3>Secret and configuration</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
 <p class="goal">Create the Secret and ConfigMap with the names and keys from the start page. Credentials go in the Secret, everything else in the ConfigMap.</p>
 <p class="writes"><b>You write:</b> <code>k8s/01-config.yaml</code></p>
+<h4>Values to use</h4>
+<div class="table-wrap"><table>
+<thead><tr><th>Object</th><th>Key / variable</th><th>Value</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>Secret <code>db-credentials</code></td><td><code>username</code></td><td><code>poll</code></td><td>Database user. The backend gets it as <code>DB_USER</code></td></tr>
+<tr><td>Secret <code>db-credentials</code></td><td><code>password</code></td><td>any text, for example <code>change-me-please</code></td><td>Database password. The backend gets it as <code>DB_PASSWORD</code></td></tr>
+<tr><td>ConfigMap <code>poll-config</code></td><td><code>DB_HOST</code></td><td><code>postgres</code></td><td>The name of the Postgres Service</td></tr>
+<tr><td>ConfigMap <code>poll-config</code></td><td><code>DB_PORT</code></td><td><code>"5432"</code> (quoted)</td><td>ConfigMap values are always strings</td></tr>
+<tr><td>ConfigMap <code>poll-config</code></td><td><code>DB_NAME</code></td><td><code>poll</code></td><td>Also used to create the database</td></tr>
+<tr><td>ConfigMap <code>poll-config</code></td><td><code>REDIS_HOST</code></td><td><code>redis</code></td><td>The name of the Redis Service</td></tr>
+<tr><td>ConfigMap <code>poll-config</code></td><td><code>TEAMS</code></td><td><code>India,Australia</code></td><td>The two choices on the poll</td></tr>
+<tr><td>ConfigMap <code>poll-config</code></td><td><code>CPU_COST_MS</code></td><td><code>"5"</code></td><td>Busy-work per vote</td></tr>
+<tr><td>(do not add)</td><td><code>REDIS_PORT</code></td><td>-</td><td>Kubernetes sets this itself for the <code>redis</code> Service. The app uses <code>CACHE_PORT</code> and defaults to 6379</td></tr>
+</tbody>
+</table></div>
 <h4>Check</h4>
 <pre><code>kubectl apply -f k8s/01-config.yaml
 kubectl get secret,configmap
@@ -91,6 +106,20 @@ data:
 <header><span class="num">1.3</span><h3>The database</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
 <p class="goal">Run Postgres as a StatefulSet with a headless Service named <code>postgres</code> and a 500 Mi volume per replica. Take the database name, user and password from the ConfigMap and Secret.</p>
 <p class="writes"><b>You write:</b> <code>k8s/10-postgres.yaml</code></p>
+<h4>Values to use</h4>
+<div class="table-wrap"><table>
+<thead><tr><th>Setting</th><th>Value</th><th>Comes from</th></tr></thead>
+<tbody>
+<tr><td>Image</td><td><code>postgres:16-alpine</code></td><td>-</td></tr>
+<tr><td>Env <code>POSTGRES_DB</code></td><td><code>poll</code></td><td>ConfigMap <code>poll-config</code>, key <code>DB_NAME</code></td></tr>
+<tr><td>Env <code>POSTGRES_USER</code></td><td><code>poll</code></td><td>Secret <code>db-credentials</code>, key <code>username</code></td></tr>
+<tr><td>Env <code>POSTGRES_PASSWORD</code></td><td>your password</td><td>Secret <code>db-credentials</code>, key <code>password</code></td></tr>
+<tr><td>Env <code>PGDATA</code></td><td><code>/var/lib/postgresql/data/pgdata</code></td><td>a plain value</td></tr>
+<tr><td>Volume mount path</td><td><code>/var/lib/postgresql/data</code></td><td><code>volumeClaimTemplates</code> named <code>data</code>, 500Mi, ReadWriteOnce</td></tr>
+<tr><td>Container port</td><td><code>5432</code></td><td>-</td></tr>
+<tr><td>Service</td><td><code>postgres</code>, headless (<code>clusterIP: None</code>)</td><td>the StatefulSet's <code>serviceName</code> too</td></tr>
+</tbody>
+</table></div>
 <h4>Check</h4>
 <pre><code>kubectl apply -f k8s/10-postgres.yaml
 kubectl get pods,pvc
@@ -153,6 +182,16 @@ spec:
 <header><span class="num">1.4</span><h3>The cache</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
 <p class="goal">Run Redis as a single-replica Deployment with a Service named <code>redis</code>.</p>
 <p class="writes"><b>You write:</b> <code>k8s/20-redis.yaml</code></p>
+<h4>Values to use</h4>
+<div class="table-wrap"><table>
+<thead><tr><th>Setting</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td>Image</td><td><code>redis:7-alpine</code></td></tr>
+<tr><td>Container port</td><td><code>6379</code></td></tr>
+<tr><td>Service</td><td><code>redis</code>, port 6379</td></tr>
+<tr><td>Environment variables</td><td>none</td></tr>
+</tbody>
+</table></div>
 <h4>Check</h4>
 <pre><code>kubectl apply -f k8s/20-redis.yaml
 kubectl get pods -l app=redis
@@ -194,6 +233,19 @@ spec:
 <header><span class="num">1.5</span><h3>The backend, three replicas</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
 <p class="goal">Run the backend as a Deployment with <b>3 replicas</b> and a Service named <code>backend</code> on port 8000. Give it every environment variable from the start page. Do not add probes yet.</p>
 <p class="writes"><b>You write:</b> <code>k8s/30-backend.yaml</code></p>
+<h4>Values to use</h4>
+<div class="table-wrap"><table>
+<thead><tr><th>Variable</th><th>Value</th><th>How to supply it</th></tr></thead>
+<tbody>
+<tr><td><code>DB_HOST</code>, <code>DB_PORT</code>, <code>DB_NAME</code></td><td>from <code>poll-config</code></td><td><code>envFrom</code> with the ConfigMap</td></tr>
+<tr><td><code>REDIS_HOST</code>, <code>TEAMS</code>, <code>CPU_COST_MS</code></td><td>from <code>poll-config</code></td><td><code>envFrom</code> with the same ConfigMap</td></tr>
+<tr><td><code>DB_USER</code></td><td>Secret <code>db-credentials</code>, key <code>username</code></td><td><code>env</code> with <code>secretKeyRef</code></td></tr>
+<tr><td><code>DB_PASSWORD</code></td><td>Secret <code>db-credentials</code>, key <code>password</code></td><td><code>env</code> with <code>secretKeyRef</code></td></tr>
+<tr><td><code>NODE_NAME</code></td><td>the node the pod runs on</td><td><code>env</code> with <code>fieldRef: spec.nodeName</code></td></tr>
+<tr><td>Do not set <code>REDIS_PORT</code></td><td>-</td><td>Kubernetes adds one itself; the app ignores it</td></tr>
+<tr><td>Image / port</td><td><code>poll-backend:1.0</code>, container port <code>8000</code> named <code>http</code></td><td>Service <code>backend</code> port 8000</td></tr>
+</tbody>
+</table></div>
 <h4>Check</h4>
 <pre><code>kubectl apply -f k8s/30-backend.yaml
 kubectl get pods -l app=backend -o wide
@@ -245,6 +297,17 @@ spec:
 <header><span class="num">1.6</span><h3>Create the tables with a Job</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
 <p class="goal">Run <code>python tools.py migrate</code> in the backend image as a one-off Job. Give its pod the label <code>app: backend-job</code> (not <code>backend</code>, or the Service would send traffic to it).</p>
 <p class="writes"><b>You write:</b> <code>k8s/40-migrate-job.yaml</code></p>
+<h4>Values to use</h4>
+<div class="table-wrap"><table>
+<thead><tr><th>Setting</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td>Image</td><td><code>poll-backend:1.0</code></td></tr>
+<tr><td>Command</td><td><code>["python", "tools.py", "migrate"]</code></td></tr>
+<tr><td>Env</td><td><code>DB_HOST</code>, <code>DB_PORT</code>, <code>DB_NAME</code> from the ConfigMap; <code>DB_USER</code>, <code>DB_PASSWORD</code> from the Secret (same as the backend)</td></tr>
+<tr><td>Pod label</td><td><code>app: backend-job</code></td></tr>
+<tr><td>Restart policy</td><td><code>OnFailure</code>, <code>backoffLimit</code> 4</td></tr>
+</tbody>
+</table></div>
 <h4>Check</h4>
 <pre><code>kubectl apply -f k8s/40-migrate-job.yaml
 kubectl wait --for=condition=complete job/db-migrate --timeout=90s
@@ -281,6 +344,17 @@ spec:
 <header><span class="num">1.7</span><h3>The frontend, two replicas</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
 <p class="goal">Run the frontend as a Deployment with <b>2 replicas</b>. The container listens on 8080. The Service <code>frontend</code> exposes port 80 and forwards to 8080.</p>
 <p class="writes"><b>You write:</b> <code>k8s/50-frontend.yaml</code></p>
+<h4>Values to use</h4>
+<div class="table-wrap"><table>
+<thead><tr><th>Setting</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td>Image</td><td><code>poll-frontend:1.0</code></td></tr>
+<tr><td>Container port</td><td><code>8080</code> (named <code>http</code>)</td></tr>
+<tr><td>Service</td><td><code>frontend</code>, port <code>80</code> forwarding to the container port</td></tr>
+<tr><td>Environment variables</td><td>none</td></tr>
+<tr><td>Must exist first</td><td>a Service named <code>backend</code> on port 8000: the frontend proxies <code>/api/</code> to <code>http://backend:8000</code></td></tr>
+</tbody>
+</table></div>
 <h4>Check</h4>
 <pre><code>kubectl apply -f k8s/50-frontend.yaml
 kubectl get pods -l app=frontend

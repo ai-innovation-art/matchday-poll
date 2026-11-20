@@ -109,6 +109,14 @@ curl -s localhost:8080/api/version</code></pre>
 <header><span class="num">4.5</span><h3>Protect against voluntary disruption</h3><label class="done"><input type="checkbox" aria-label="Mark mission done"> done</label></header>
 <p class="goal">Add PodDisruptionBudgets: at least 2 backend pods and at least 1 frontend pod must stay available during voluntary disruptions such as node drains.</p>
 <p class="writes"><b>You write:</b> <code>k8s/80-pdb.yaml</code></p>
+<h4>Values to use</h4>
+<div class="table-wrap"><table>
+<thead><tr><th>PodDisruptionBudget</th><th>Selector</th><th>Minimum available</th></tr></thead>
+<tbody>
+<tr><td><code>backend</code></td><td><code>app: backend</code></td><td><code>2</code></td></tr>
+<tr><td><code>frontend</code></td><td><code>app: frontend</code></td><td><code>1</code></td></tr>
+</tbody>
+</table></div>
 <h4>Check</h4>
 <pre><code>kubectl apply -f k8s/80-pdb.yaml
 kubectl get pdb</code></pre>
