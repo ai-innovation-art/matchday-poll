@@ -32,6 +32,7 @@ Each mission has a goal, a check, and optional hints and a full solution. Try it
 app/frontend/   nginx and the poll page (Dockerfile ready)
 app/backend/    the API and a small tools script (Dockerfile ready)
 docs/           the guide
+cluster/        empty: your kind cluster file goes here
 k8s/            empty: your manifests go here
 scripts/        empty: your scripts go here
 ```

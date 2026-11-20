@@ -134,7 +134,7 @@ kubectl get pods,hpa,pdb,networkpolicy,cronjob -n poll</code></pre>
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-kind create cluster --config k8s/kind-cluster.yaml
+kind create cluster --config cluster/kind-cluster.yaml
 
 docker build --build-arg APP_VERSION=1.1 -t poll-backend:1.1 app/backend
 docker build -t poll-frontend:1.0 app/frontend

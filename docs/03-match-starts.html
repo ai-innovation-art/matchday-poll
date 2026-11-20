@@ -82,8 +82,9 @@ kubectl get hpa -w
 kubectl get pods -l app=backend</code></pre>
 <p class="expect"><b>Expect:</b> TARGETS rises above <code>50%</code>, and REPLICAS grows from 3 towards 8 within a minute or two. When the load stops, REPLICAS falls back to 3 after about a minute.</p>
 <details class="predict"><summary>Predict first: with 3 pods at 150% of their CPU request and a 50% target, how many replicas does the autoscaler want?</summary><div class="body">ceil(3 × 150 ÷ 50) = 9, capped at the maximum of 8.</div></details>
-<details class="hint"><summary>Hint 1</summary><div class="body">The API is <code>autoscaling/v2</code>. The metric is <code>type: Resource</code>, <code>name: cpu</code>, target type <code>Utilization</code>.</div></details>
-<details class="hint"><summary>Hint 2</summary><div class="body">Faster scale-down goes under <code>behavior.scaleDown.stabilizationWindowSeconds</code>. If TARGETS shows <code>&lt;unknown&gt;</code>, metrics-server is not working yet, or the pods have no CPU request.</div></details>
+<details class="hint"><summary>Hint 1</summary><div class="body">Once an autoscaler owns the replica count, re-applying a Deployment file that says <code>replicas: 3</code> resets it to 3 until the autoscaler corrects it. Real teams then remove <code>replicas</code> from the manifest.</div></details>
+<details class="hint"><summary>Hint 2</summary><div class="body">The API is <code>autoscaling/v2</code>. The metric is <code>type: Resource</code>, <code>name: cpu</code>, target type <code>Utilization</code>.</div></details>
+<details class="hint"><summary>Hint 3</summary><div class="body">Faster scale-down goes under <code>behavior.scaleDown.stabilizationWindowSeconds</code>. If TARGETS shows <code>&lt;unknown&gt;</code>, metrics-server is not working yet, or the pods have no CPU request.</div></details>
 <details class="solution"><summary>Full solution</summary><div class="body"><pre data-title="k8s/70-hpa.yaml"><code>apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
