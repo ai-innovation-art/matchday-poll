@@ -86,7 +86,7 @@
 </tbody>
 </table></div>
 
-<p>About 6 GB of free memory is enough for a 3-node cluster plus the app.</p>
+<p>About 6 GB of free memory is enough for a 3-node cluster plus the app. Not installed yet? <a href="00-setup.html">Act 0</a> has install steps for Windows, macOS and Linux, including how to set the PATH.</p>
 
 <h2>The names the app expects</h2>
 <p>The code looks these up by name, so your manifests must use them exactly.</p>
@@ -109,13 +109,15 @@
 <tbody>
 <tr><td><code>DB_HOST</code>, <code>DB_PORT</code>, <code>DB_NAME</code></td><td>postgres, 5432, poll</td><td>Where the database is</td></tr>
 <tr><td><code>DB_USER</code>, <code>DB_PASSWORD</code></td><td>poll, (empty)</td><td>Credentials. Come from the Secret</td></tr>
-<tr><td><code>REDIS_HOST</code>, <code>REDIS_PORT</code></td><td>redis, 6379</td><td>Where Redis is</td></tr>
+<tr><td><code>REDIS_HOST</code></td><td>redis</td><td>Where Redis is</td></tr>
+<tr><td><code>CACHE_PORT</code></td><td>6379</td><td>Redis port. Leave unset</td></tr>
 <tr><td><code>TEAMS</code></td><td>India,Australia</td><td>The two options on the poll</td></tr>
 <tr><td><code>CPU_COST_MS</code></td><td>5</td><td>Busy-work per vote, so load costs real CPU</td></tr>
 <tr><td><code>NODE_NAME</code></td><td>unknown</td><td>Fill from the Downward API; the page shows which node answered</td></tr>
 </tbody>
 </table></div>
 
+<div class="callout"><b>Why not <code>REDIS_PORT</code>?</b> For every Service in a namespace, Kubernetes injects environment variables into the pods started after it, named after the Service. A Service called <code>redis</code> produces <code>REDIS_PORT=tcp://10.96.x.x:6379</code> and <code>REDIS_SERVICE_HOST</code>, which would silently override an app setting of the same name. You can switch this off with <code>enableServiceLinks: false</code> in the pod spec.</div>
 <h3>Backend endpoints</h3>
 <div class="table-wrap"><table>
 <thead><tr><th>Endpoint</th><th>Meaning</th></tr></thead>

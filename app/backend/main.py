@@ -33,7 +33,8 @@ STARTED = time.time()
 
 cache = redis.Redis(
     host=os.getenv("REDIS_HOST", "redis"),
-    port=int(os.getenv("REDIS_PORT", "6379")),
+    # Not REDIS_PORT: Kubernetes creates REDIS_PORT=tcp://<ip>:6379 for a Service named "redis".
+    port=int(os.getenv("CACHE_PORT", "6379")),
     socket_timeout=1,
     socket_connect_timeout=1,
     decode_responses=True,

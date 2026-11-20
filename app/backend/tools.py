@@ -57,7 +57,7 @@ def reset():
     with conn, conn.cursor() as cur:
         cur.execute("TRUNCATE votes")
     try:
-        redis.Redis(host=os.getenv("REDIS_HOST", "redis"), port=int(os.getenv("REDIS_PORT", "6379")),
+        redis.Redis(host=os.getenv("REDIS_HOST", "redis"), port=int(os.getenv("CACHE_PORT", "6379")),
                     socket_timeout=3, socket_connect_timeout=3).delete("totals")
     except redis.RedisError as exc:
         print(f"reset: could not clear the cache ({exc}); it is rebuilt on the next read", flush=True)
